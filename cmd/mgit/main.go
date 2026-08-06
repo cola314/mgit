@@ -22,7 +22,9 @@ const version = "0.1.0"
 const usage = `mgit — 로컬 git 뷰어 + 에이전트 메모
 
 사용법:
-  mgit [<경로>] [-c <리비전>]      저장소를 연다 (GUI 는 아직 미구현)
+  mgit [<경로>] [-c <리비전>]      뷰어를 연다 (브라우저)
+      -no-browser                 브라우저를 자동으로 열지 않는다
+      -print-url                  주소만 출력하고 종료한다
 
   mgit note add <경로>:<줄> -m <내용> [-c <리비전>]
   mgit note add -c <리비전> -m <내용>          커밋 전체에 대한 메모
@@ -58,46 +60,6 @@ func run(args []string) error {
 		}
 	}
 	return runOpen(args)
-}
-
-// runOpen 은 뷰어 실행 파라미터를 해석한다.
-//
-// GUI 가 붙기 전이지만 인자 해석·리비전 검증은 지금 확정해 둔다. 이후 모든 화면이
-// "URL 로 진입 가능한 상태"로 설계되도록 순서를 이렇게 잡았다.
-func runOpen(args []string) error {
-	fs := flag.NewFlagSet("mgit", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-	rev := fs.String("c", "", "열면서 이동할 리비전")
-	pos, err := parseMixed(fs, args)
-	if err != nil {
-		return err
-	}
-	dir := "."
-	if len(pos) > 0 {
-		dir = pos[0]
-	}
-	if len(pos) > 1 {
-		return fmt.Errorf("경로는 하나만 지정할 수 있습니다: %s", strings.Join(pos, " "))
-	}
-
-	repo, err := gitx.Open(dir)
-	if err != nil {
-		return err
-	}
-	sha, err := repo.ResolveCommit(*rev)
-	if err != nil {
-		return err
-	}
-
-	fmt.Printf("저장소: %s\n", repo.Root)
-	fmt.Printf("커밋:   %s  %s\n", repo.Short(sha), repo.Subject(sha))
-	st, err := notes.Open(repo.Root)
-	if err != nil {
-		return err
-	}
-	fmt.Printf("메모:   open %d / total %d\n\n", len(st.Select(notes.StatusOpen)), len(st.Notes))
-	fmt.Println("GUI 뷰어는 아직 구현되지 않았습니다. 지금은 mgit note 를 쓰세요 (mgit --help).")
-	return nil
 }
 
 func runNote(args []string) error {
