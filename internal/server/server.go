@@ -58,6 +58,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/log", s.handleLog)
 	s.mux.HandleFunc("GET /api/commit/{sha}", s.handleCommit)
 	s.mux.HandleFunc("GET /api/diff/{sha}", s.handleDiff)
+	s.mux.HandleFunc("GET /api/file/{sha}", s.handleFile)
 	s.mux.HandleFunc("GET /api/state", s.handleState)
 	s.mux.HandleFunc("POST /api/goto", s.handleGoto)
 
@@ -168,6 +169,60 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 		files = []gitx.FileDiff{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"sha": sha, "files": files})
+}
+
+// MaxFileLines 는 파일 전문 조회에서 한 번에 내려보내는 최대 줄 수다.
+// 생성된 소스나 덤프 파일 하나로 브라우저를 멈추게 하지 않으려는 상한이다.
+const MaxFileLines = 20000
+
+// handleFile 은 특정 커밋 시점의 파일 전문을 준다.
+//
+// diff 는 헝크 주변만 보여주므로 앞뒤 맥락이 필요할 때가 있다. 워킹트리가 아니라
+// 그 커밋 시점을 읽는 것이 중요하다 — 지금 파일은 이미 달라져 있을 수 있다.
+func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
+	sha, err := s.repo.ResolveCommit(r.PathValue("sha"))
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	path := r.URL.Query().Get("path")
+	if strings.TrimSpace(path) == "" {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("path 가 필요합니다"))
+		return
+	}
+	rel, err := s.repo.RelPath(path)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	lines, err := s.repo.FileLines(sha, rel)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+
+	// 바이너리는 줄 단위로 보여줄 게 없다. NUL 이 있으면 바이너리로 본다.
+	for _, l := range lines {
+		if strings.ContainsRune(l, 0) {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"sha": sha, "path": rel, "binary": true, "lines": []string{},
+			})
+			return
+		}
+	}
+
+	truncated := false
+	if len(lines) > MaxFileLines {
+		lines = lines[:MaxFileLines]
+		truncated = true
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"sha":       sha,
+		"path":      rel,
+		"lines":     lines,
+		"truncated": truncated,
+		"total":     len(lines),
+	})
 }
 
 // ── 딥링크 ────────────────────────────────────────────────────────

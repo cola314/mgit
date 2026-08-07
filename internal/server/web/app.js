@@ -279,6 +279,18 @@ function fileCard(f) {
   st.appendChild(document.createTextNode(" "));
   st.appendChild(el("span", "d", `−${f.del}`));
   head.appendChild(st);
+
+  if (!f.binary) {
+    const open = el("button", "iconbtn", "⤢");
+    open.type = "button";
+    open.title = "파일 전문 보기";
+    open.setAttribute("aria-label", `${baseOf(f.path)} 전문 보기`);
+    open.style.width = "24px";
+    open.style.height = "22px";
+    open.onclick = ev => { ev.stopPropagation(); openFileView(f); };  // 접기와 겹치지 않게
+    head.appendChild(open);
+  }
+
   head.onclick = () => {
     if (state.collapsed.has(f.path)) state.collapsed.delete(f.path);
     else state.collapsed.add(f.path);
@@ -434,6 +446,133 @@ function composer(kind) {
   cf.appendChild(cancel); cf.appendChild(save);
   box.appendChild(cf);
   return box;
+}
+
+/* ── 파일 전문 뷰어 ─────────────────────────────────────────────── */
+// diff 는 헝크 주변만 보여준다. 앞뒤 맥락이 필요할 때 그 커밋 시점의 파일 전체를
+// 겹쳐 띄운다. 워킹트리가 아니라 커밋 시점을 읽는 게 핵심 — 지금 파일은 이미
+// 달라져 있을 수 있다.
+let fvReturnFocus = null;
+let fvRuns = [];   // 변경 구간 목록 [{start,end}] — 연속된 줄은 한 덩어리
+let fvIdx = -1;
+
+// 연속된 줄 번호를 구간으로 묶는다. 374·375·376 이 각각 멈춤 지점이 되면
+// 버튼을 세 번 눌러야 다음 변경으로 넘어가 성가시다.
+function groupRuns(sorted) {
+  const runs = [];
+  for (const n of sorted) {
+    const last = runs[runs.length - 1];
+    if (last && n === last.end + 1) last.end = n;
+    else runs.push({start: n, end: n});
+  }
+  return runs;
+}
+
+async function openFileView(f) {
+  const ov = $("#fileview"), body = $("#fvbody");
+  fvReturnFocus = document.activeElement;
+
+  const title = $("#fvtitle");
+  title.textContent = "";
+  const dir = dirOf(f.path);
+  if (dir) title.appendChild(el("span", "dir", dir));
+  title.appendChild(document.createTextNode(baseOf(f.path)));
+  title.title = f.path;
+
+  const c = state.byId.get(state.sel);
+  $("#fvmeta").textContent = c ? c.short : "";
+  body.textContent = "";
+  body.appendChild(el("div", "emptyish", "불러오는 중…"));
+  ov.hidden = false;
+  $("#fvclose").focus();
+
+  let data;
+  try {
+    data = await api(`/api/file/${state.sel}?path=${encodeURIComponent(f.path)}`);
+  } catch (e) {
+    body.textContent = "";
+    body.appendChild(el("div", "err", "파일을 불러오지 못했습니다: " + e.message));
+    return;
+  }
+  if (ov.hidden) return;   // 로딩 중에 닫혔다
+
+  body.textContent = "";
+  if (data.binary) {
+    body.appendChild(el("div", "emptyish", "바이너리 파일입니다."));
+    return;
+  }
+
+  // 이 커밋에서 추가·수정된 줄을 표시해 전문 안에서도 diff 위치를 잃지 않게 한다.
+  const changed = new Set();
+  for (const hk of f.hunks || []) {
+    for (const L of hk.lines || []) if (L.kind === "add" && L.newNo) changed.add(L.newNo);
+  }
+
+  const lang = HL.langOf(f.path);
+  let hlState = {block: false};
+  const frag = document.createDocumentFragment();
+
+  data.lines.forEach((text, i) => {
+    const n = i + 1;
+    const line = el("div", "fvline" + (changed.has(n) ? " changed" : ""));
+    line.dataset.line = n;
+    line.appendChild(el("i", "no", String(n)));
+    const code = el("div", "code");
+    if (lang) {
+      const r = HL.highlight(text, lang, hlState);
+      hlState = r.state;
+      code.innerHTML = r.html || " ";
+    } else {
+      code.textContent = text || " ";
+    }
+    line.appendChild(code);
+    frag.appendChild(line);
+  });
+  body.appendChild(frag);
+
+  if (data.truncated) {
+    body.appendChild(el("div", "emptyish",
+      `파일이 너무 길어 앞부분 ${data.lines.length}줄만 표시했습니다.`));
+  }
+
+  fvRuns = groupRuns([...changed].sort((a, b) => a - b));
+  fvIdx = -1;
+  $("#fvjump").hidden = fvRuns.length === 0;
+  if (fvRuns.length) fvNext();
+}
+
+// 변경 구간을 순서대로 돈다. 끝에 닿으면 처음으로 감는다.
+function fvNext() {
+  if (!fvRuns.length) return;
+  fvIdx = (fvIdx + 1) % fvRuns.length;
+  const run = fvRuns[fvIdx];
+
+  const btn = $("#fvjump");
+  btn.textContent = fvRuns.length > 1
+    ? `변경 ${fvIdx + 1}/${fvRuns.length} ↓`
+    : "변경 위치";
+  btn.title = fvRuns.length > 1
+    ? `다음 변경 구간으로 (${run.start}${run.end > run.start ? "–" + run.end : ""}번 줄)`
+    : "이 커밋에서 바뀐 줄로";
+
+  // 구간 전체를 잠깐 강조한다. 첫 줄만 깜빡이면 어디까지가 변경인지 안 보인다.
+  for (let n = run.start; n <= run.end; n++) {
+    const el = document.querySelector(`.fvline[data-line="${n}"]`);
+    if (!el) continue;
+    if (n === run.start) el.scrollIntoView({block: "center"});
+    el.classList.remove("flash");
+    void el.offsetWidth;   // 애니메이션 재시작
+    el.classList.add("flash");
+  }
+}
+
+function closeFileView() {
+  const ov = $("#fileview");
+  if (ov.hidden) return;
+  ov.hidden = true;
+  $("#fvbody").textContent = "";
+  if (fvReturnFocus && fvReturnFocus.isConnected) fvReturnFocus.focus();
+  fvReturnFocus = null;
 }
 
 /* ── 메모 레일 ──────────────────────────────────────────────────── */
@@ -848,8 +987,14 @@ function syncURL() {
   history.replaceState(null, "", location.pathname + "?" + q);
 }
 
-async function applyURL() {
-  const q = new URLSearchParams(location.search);
+// 진입 시점의 쿼리를 즉시 붙잡아 둔다. boot 중 setView 가 syncURL 을 호출해
+// 주소를 덮어쓰기 때문에, 나중에 location.search 를 읽으면 이미 지워져 있다.
+const INITIAL_QUERY = new URLSearchParams(location.search);
+
+// 진입 쿼리를 해석만 한다. 화면 전환은 boot 이 마지막에 한 번만 한다 —
+// 여러 곳에서 setView 를 부르면 호출 순서에 따라 결과가 달라진다.
+async function resolveURL() {
+  const q = INITIAL_QUERY;
   const rev = q.get("c");
   const view = q.get("view");
   let target = null;
@@ -858,13 +1003,15 @@ async function applyURL() {
     try {
       const d = await api(`/api/commit/${encodeURIComponent(rev)}`);
       target = d.sha;
-    } catch (e) {
+    } catch (_) {
       toast(`?c=${rev} 를 찾지 못했습니다`);
     }
   }
-  if (view === "detail" || (rev && view !== "graph")) setView("detail");
-  else if (view === "graph") setView("graph");
-  return target;
+
+  let wantView = null;
+  if (view === "graph" || view === "detail") wantView = view;
+  else if (rev) wantView = "detail";   // 커밋만 콕 집었으면 상세로
+  return {target, wantView};
 }
 
 /* ── 테마 ───────────────────────────────────────────────────────── */
@@ -1018,12 +1165,17 @@ async function boot() {
     state.seq = st.seq;
     state.notesRev = st.notesRev;
     state.head = st.head;
-    if (st.explicit) setView("detail");
 
     // URL 쿼리가 서버가 준 target 보다 우선한다. 주소를 직접 띄운 쪽이
     // 더 최근 의도이기 때문이다.
-    const fromURL = await applyURL();
-    await select(fromURL || st.target || (state.commits[0] && state.commits[0].sha));
+    const url = await resolveURL();
+    await select(url.target || st.target || (state.commits[0] && state.commits[0].sha));
+
+    // 뷰 결정은 여기 한 곳뿐이다. URL 이 명시했으면 그대로, 아니면 서버가
+    // -c 로 커밋을 콕 집어 띄운 경우 상세로 연다.
+    if (url.wantView) setView(url.wantView);
+    else if (st.explicit) setView("detail");
+
     render();
   } catch (e) {
     document.body.innerHTML = `<div class="err" style="margin:24px">시작 실패: ${e.message}</div>`;
@@ -1048,6 +1200,19 @@ async function boot() {
     if (e.key === "Enter" || e.key === " ") { e.preventDefault(); select(row.dataset.sha); setView("detail"); }
     if (e.key === "ArrowDown" && row.nextElementSibling) { e.preventDefault(); row.nextElementSibling.focus(); }
     if (e.key === "ArrowUp" && row.previousElementSibling) { e.preventDefault(); row.previousElementSibling.focus(); }
+  });
+
+  $("#fvclose").onclick = closeFileView;
+  $("#fvbackdrop").onclick = closeFileView;
+  $("#fvjump").onclick = fvNext;
+  document.addEventListener("keydown", e => {
+    if ($("#fileview").hidden) return;
+    if (e.key === "Escape") { e.preventDefault(); closeFileView(); }
+    // n = 다음 변경 구간. 파일이 길 때 버튼까지 마우스를 옮기지 않아도 되도록.
+    if ((e.key === "n" || e.key === "N") && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      fvNext();
+    }
   });
 
   $("#scopehead").onchange = e => setScopeHead(e.target.checked);

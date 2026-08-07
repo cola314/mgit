@@ -350,6 +350,67 @@ func TestDiffEndpoint(t *testing.T) {
 	}
 }
 
+// 파일 전문은 워킹트리가 아니라 그 커밋 시점을 읽어야 한다.
+// diff 에서 잘린 앞뒤 맥락을 보려는 기능인데 지금 파일을 주면 의미가 없다.
+func TestFileEndpointReadsCommitSnapshot(t *testing.T) {
+	srv, repo := newTestServer(t)
+	root, err := repo.ResolveCommit("HEAD~1") // Foo.go 가 return 1 이던 시점
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var got struct {
+		Path      string   `json:"path"`
+		Lines     []string `json:"lines"`
+		Binary    bool     `json:"binary"`
+		Truncated bool     `json:"truncated"`
+	}
+	get(t, srv, "/api/file/"+root+"?path=Foo.go", &got)
+
+	if got.Path != "Foo.go" || got.Binary || got.Truncated {
+		t.Fatalf("응답 = %+v", got)
+	}
+	if len(got.Lines) < 4 {
+		t.Fatalf("줄 수 = %d, want >= 4", len(got.Lines))
+	}
+	if got.Lines[0] != "package foo" {
+		t.Errorf("첫 줄 = %q, want %q", got.Lines[0], "package foo")
+	}
+	joined := strings.Join(got.Lines, "\n")
+	if !strings.Contains(joined, "return 1") {
+		t.Errorf("그 커밋 시점 내용이 아니다:\n%s", joined)
+	}
+
+	// HEAD 시점은 값이 바뀌어 있어야 한다 (같은 엔드포인트, 다른 커밋).
+	head, _ := repo.ResolveCommit("HEAD")
+	var now struct {
+		Lines []string `json:"lines"`
+	}
+	get(t, srv, "/api/file/"+head+"?path=Foo.go", &now)
+	if !strings.Contains(strings.Join(now.Lines, "\n"), "return 2") {
+		t.Errorf("HEAD 시점 내용이 아니다: %v", now.Lines)
+	}
+}
+
+func TestFileEndpointValidation(t *testing.T) {
+	srv, repo := newTestServer(t)
+	head, _ := repo.ResolveCommit("HEAD")
+
+	if resp := get(t, srv, "/api/file/"+head, nil); resp.StatusCode != 400 {
+		t.Errorf("path 없음 = %d, want 400", resp.StatusCode)
+	}
+	if resp := get(t, srv, "/api/file/"+head+"?path=NoSuch.go", nil); resp.StatusCode != 404 {
+		t.Errorf("없는 파일 = %d, want 404", resp.StatusCode)
+	}
+	if resp := get(t, srv, "/api/file/nope?path=Foo.go", nil); resp.StatusCode != 404 {
+		t.Errorf("없는 커밋 = %d, want 404", resp.StatusCode)
+	}
+	// 저장소 바깥 경로는 막아야 한다.
+	if resp := get(t, srv, "/api/file/"+head+"?path=../../etc/passwd", nil); resp.StatusCode == 200 {
+		t.Error("저장소 바깥 경로가 통과했다")
+	}
+}
+
 func TestNoteLifecycle(t *testing.T) {
 	srv, repo := newTestServer(t)
 	head, _ := repo.ResolveCommit("HEAD")
