@@ -19,7 +19,8 @@ const state = {
   diff: null,
   view: "graph",
   showAll: true,
-  composer: null,    // {line, path} | "commit"
+  composer: null,    // {path, line, endLine} | "commit"   endLine 0 이면 단일 줄
+  replyTo: null,     // 답글을 쓰고 있는 부모 메모 ID
   scopeHead: false,  // true 면 현재 브랜치(HEAD)의 조상만
   flashNote: null,
   collapsed: new Set(),
@@ -236,10 +237,33 @@ function drawDetail() {
   $("#diffmeta").textContent = (c.parents || []).length > 1 ? "merge commit · 첫 부모 기준" : "";
 }
 
-function notesForLine(path, line) {
+/* 메모가 덮는 마지막 줄. endLine 이 없는 옛 메모는 시작 줄과 같다. */
+const lastLineOf = n => (n.anchor.endLine > n.anchor.line ? n.anchor.endLine : n.anchor.line);
+const isRange = n => n.anchor.endLine > n.anchor.line;
+
+/* 이 커밋·파일에 달린 루트 메모만. 답글은 부모 박스 안에서 함께 그린다. */
+function rootNotesFor(path) {
   return state.notes.filter(n =>
-    n.kind === "line" && n.anchor.commit === state.sel &&
-    n.anchor.path === path && n.anchor.line === line);
+    n.kind === "line" && !n.parent && n.anchor.commit === state.sel && n.anchor.path === path);
+}
+
+/* 박스를 놓을 자리 — 범위의 끝 줄 뒤다. 그래야 코드 덩어리가 중간에 안 잘린다. */
+function notesEndingAt(path, line) {
+  return rootNotesFor(path).filter(n => lastLineOf(n) === line);
+}
+
+/* 하이라이트용 — 이 줄을 덮는 메모가 있는지. */
+function notesCovering(path, line) {
+  return rootNotesFor(path).filter(n => line >= n.anchor.line && line <= lastLineOf(n));
+}
+
+/* 지금 열려 있는 컴포저가 이 줄을 덮는지 (범위 선택 미리보기). */
+function composerCovers(path, line) {
+  const c = state.composer;
+  if (!c || c === "commit" || c.path !== path) return false;
+  const lo = Math.min(c.line, c.endLine || c.line);
+  const hi = Math.max(c.line, c.endLine || c.line);
+  return line >= lo && line <= hi;
 }
 
 function drawDiff() {
@@ -317,10 +341,17 @@ function fileCard(f) {
     for (const L of hk.lines || []) {
       const anchor = L.newNo || 0;
       const line = el("div", "dline" + (L.kind === "add" ? " add" : L.kind === "del" ? " del" : ""));
-      const mine = anchor ? notesForLine(f.path, anchor) : [];
+      const ending = anchor ? notesEndingAt(f.path, anchor) : [];
       if (anchor) {
         line.dataset.line = anchor;
-        if (mine.length) line.classList.add("noted");
+        // 범위 전체에 띠를 두른다. 시작·끝에만 모서리를 줘서 덩어리로 보이게 한다.
+        const covering = notesCovering(f.path, anchor);
+        if (covering.length) {
+          line.classList.add("noted");
+          if (covering.some(n => n.anchor.line === anchor)) line.classList.add("noted-top");
+          if (covering.some(n => lastLineOf(n) === anchor)) line.classList.add("noted-bot");
+        }
+        if (composerCovers(f.path, anchor)) line.classList.add("picking");
       }
 
       const gut = el("div", "gut");
@@ -330,14 +361,23 @@ function fileCard(f) {
         const b = el("i", "addbtn", "✎");
         b.tabIndex = 0;
         b.setAttribute("role", "button");
-        b.title = `${anchor}번 줄에 메모 달기`;
+        b.title = `${anchor}번 줄에 메모 달기 (Shift+클릭으로 범위 지정)`;
         b.setAttribute("aria-label", b.title);
         const open = ev => {
           ev.preventDefault(); ev.stopPropagation();
-          state.composer = {line: anchor, path: f.path};
+          const c = state.composer;
+          // Shift+클릭: 이미 이 파일에 컴포저가 열려 있으면 거기까지 범위를 늘린다.
+          if (ev.shiftKey && c && c !== "commit" && c.path === f.path) {
+            const lo = Math.min(c.line, anchor), hi = Math.max(c.line, anchor);
+            state.composer = {path: f.path, line: lo, endLine: hi > lo ? hi : 0};
+          } else {
+            state.composer = {path: f.path, line: anchor, endLine: 0};
+          }
           state.flashNote = null;
+          const keep = $("#composer-ta") ? $("#composer-ta").value : "";
           drawDiff();
-          const ta = $("#composer-ta"); if (ta) ta.focus();
+          const ta = $("#composer-ta");
+          if (ta) { ta.value = keep; ta.focus(); }   // 범위를 늘려도 쓰던 글은 살린다
         };
         b.addEventListener("click", open);
         b.addEventListener("keydown", ev => { if (ev.key === "Enter" || ev.key === " ") open(ev); });
@@ -366,9 +406,10 @@ function fileCard(f) {
       line.appendChild(txt);
       sec.appendChild(line);
 
-      for (const n of mine) sec.appendChild(inlineNote(n));
-      if (state.composer && state.composer !== "commit" &&
-          state.composer.line === anchor && state.composer.path === f.path) {
+      for (const n of ending) sec.appendChild(inlineNote(n));
+      // 컴포저도 범위 끝 뒤에 놓는다. 범위를 늘리면 박스가 따라 내려온다.
+      if (state.composer && state.composer !== "commit" && state.composer.path === f.path &&
+          (state.composer.endLine || state.composer.line) === anchor) {
         sec.appendChild(composer("line"));
       }
     }
@@ -378,6 +419,17 @@ function fileCard(f) {
   return card;
 }
 
+/* 메모 위치 표기. 범위면 시작-끝. */
+function locLabel(n) {
+  const base = baseOf(n.anchor.path);
+  return isRange(n) ? `${base}:${n.anchor.line}-${n.anchor.endLine}` : `${base}:${n.anchor.line}`;
+}
+
+/* 이 메모에 달린 답글 (생성 순). */
+const repliesOf = id => state.notes
+  .filter(n => n.parent === id)
+  .sort((a, b) => (a.created || "").localeCompare(b.created || ""));
+
 function inlineNote(n) {
   const box = el("div", "inote " + n.status);
   box.dataset.id = n.id;
@@ -386,11 +438,13 @@ function inlineNote(n) {
   const ih = el("div", "ih");
   ih.appendChild(el("span", "nid", n.id));
   ih.appendChild(el("span", "nst", n.status));
-  const at = el("span", "iat", `${baseOf(n.anchor.path)}:${n.anchor.line}`);
-  at.title = `${n.anchor.path}:${n.anchor.line}`;
+  const at = el("span", "iat", locLabel(n));
+  at.title = isRange(n)
+    ? `${n.anchor.path}:${n.anchor.line}-${n.anchor.endLine} (${n.anchor.endLine - n.anchor.line + 1}줄)`
+    : `${n.anchor.path}:${n.anchor.line}`;
   ih.appendChild(at);
   const x = el("button", "nx", "✕");
-  x.type = "button"; x.title = "메모 삭제";
+  x.type = "button"; x.title = "메모 삭제 (답글도 함께 지워집니다)";
   x.setAttribute("aria-label", `${n.id} 삭제`);
   x.onclick = ev => { ev.stopPropagation(); removeNote(n); };
   ih.appendChild(x);
@@ -399,13 +453,76 @@ function inlineNote(n) {
   box.appendChild(el("div", "ibody", n.body));
   if (n.resolution) box.appendChild(el("div", "ires", "→ " + n.resolution));
 
+  // 답글 — 부모 박스 안에 이어 붙인다. 대화를 한 덩어리로 읽히게.
+  for (const r of repliesOf(n.id)) {
+    const rb = el("div", "ireply");
+    const rh = el("div", "ih");
+    rh.appendChild(el("span", "nid", r.id));
+    rh.appendChild(el("span", "iat", "답글"));
+    const rx = el("button", "nx", "✕");
+    rx.type = "button"; rx.title = "답글 삭제";
+    rx.setAttribute("aria-label", `${r.id} 삭제`);
+    rx.onclick = ev => { ev.stopPropagation(); removeNote(r); };
+    rh.appendChild(rx);
+    rb.appendChild(rh);
+    rb.appendChild(el("div", "ibody", r.body));
+    box.appendChild(rb);
+  }
+
+  if (state.replyTo === n.id) {
+    box.appendChild(replyComposer(n));
+  }
+
   const act = el("div", "iact");
   const tg = el("button", "btn sm" + (n.status === "open" ? " pri" : ""),
                 n.status === "open" ? "완료 처리" : "다시 열기");
   tg.type = "button";
   tg.onclick = ev => { ev.stopPropagation(); toggleNote(n); };
   act.appendChild(tg);
+
+  const rp = el("button", "btn sm", state.replyTo === n.id ? "답글 취소" : "답글");
+  rp.type = "button";
+  rp.onclick = ev => {
+    ev.stopPropagation();
+    state.replyTo = state.replyTo === n.id ? null : n.id;
+    render();
+    const ta = $("#reply-ta"); if (ta) ta.focus();
+  };
+  act.appendChild(rp);
   box.appendChild(act);
+  return box;
+}
+
+/* 답글 입력칸. 부모 박스 안에 뜬다. */
+function replyComposer(parent) {
+  const box = el("div", "composer reply");
+  const ta = document.createElement("textarea");
+  ta.id = "reply-ta";
+  ta.placeholder = `${parent.id} 에 답글… (Ctrl+Enter 저장)`;
+  box.appendChild(ta);
+
+  const cf = el("div", "cf");
+  cf.appendChild(el("span", "at", `→ ${parent.id}`));
+  const cancel = el("button", "btn", "취소");
+  cancel.type = "button";
+  cancel.onclick = ev => { ev.stopPropagation(); state.replyTo = null; render(); };
+  const save = el("button", "btn pri", "답글 저장");
+  save.type = "button";
+  const submit = async () => {
+    const v = ta.value.trim();
+    if (!v) { ta.focus(); return; }
+    save.disabled = true;
+    try { await createReply(parent.id, v); }
+    catch (e) { toast("답글 저장 실패: " + e.message); save.disabled = false; }
+  };
+  save.onclick = ev => { ev.stopPropagation(); submit(); };
+  ta.addEventListener("keydown", ev => {
+    if ((ev.ctrlKey || ev.metaKey) && ev.key === "Enter") { ev.preventDefault(); submit(); }
+    if (ev.key === "Escape") { ev.preventDefault(); state.replyTo = null; render(); }
+  });
+  cf.appendChild(cancel);
+  cf.appendChild(save);
+  box.appendChild(cf);
   return box;
 }
 
@@ -420,10 +537,15 @@ function composer(kind) {
 
   const cf = el("div", "cf");
   const c = state.byId.get(state.sel);
+  const span = kind === "commit" ? "" :
+    (state.composer.endLine > state.composer.line
+      ? `${state.composer.line}-${state.composer.endLine} (${state.composer.endLine - state.composer.line + 1}줄)`
+      : `${state.composer.line}`);
   cf.appendChild(el("span", "at", kind === "commit"
     ? `${c ? c.short : ""} · 커밋 전체`
-    : `${c ? c.short : ""} · ${baseOf(state.composer.path)}:${state.composer.line}`));
-  const hint = el("span", "at", "Ctrl+Enter 저장");
+    : `${c ? c.short : ""} · ${baseOf(state.composer.path)}:${span}`));
+  const hint = el("span", "at",
+    kind === "commit" ? "Ctrl+Enter 저장" : "Shift+클릭으로 범위 · Ctrl+Enter 저장");
   hint.style.flex = "none"; hint.style.marginRight = "0";
   cf.appendChild(hint);
 
@@ -576,8 +698,10 @@ function closeFileView() {
 }
 
 /* ── 메모 레일 ──────────────────────────────────────────────────── */
+/* 레일에는 루트만 세운다. 답글은 각 박스 안에 붙는다. */
 const visibleNotes = () =>
-  state.showAll ? state.notes : state.notes.filter(n => n.anchor.commit === state.sel);
+  (state.showAll ? state.notes : state.notes.filter(n => n.anchor.commit === state.sel))
+    .filter(n => !n.parent);
 
 function drawNotes() {
   const pane = $("#p-notes");
@@ -614,10 +738,18 @@ function drawNotes() {
 
     const short = (n.anchor.commit || "").slice(0, 9);
     box.appendChild(el("div", "nloc", n.kind === "line"
-      ? `${short} · ${baseOf(n.anchor.path)}:${n.anchor.line}`
+      ? `${short} · ${locLabel(n)}`
       : `${short} · 커밋 전체`));
     box.appendChild(el("div", "nbody", n.body));
     if (n.resolution) box.appendChild(el("div", "nres", "→ " + n.resolution));
+
+    const kids = repliesOf(n.id);
+    for (const r of kids) {
+      const rb = el("div", "nreply");
+      rb.appendChild(el("span", "nid", r.id));
+      rb.appendChild(el("div", "nbody", r.body));
+      box.appendChild(rb);
+    }
 
     const act = el("div", "nact");
     const tg = el("button", "btn sm" + (n.status === "open" ? " pri" : ""),
@@ -632,8 +764,10 @@ function drawNotes() {
     pane.appendChild(box);
   }
 
-  const open = state.notes.filter(n => n.status === "open").length;
-  $("#notecnt").textContent = `open ${open} / total ${state.notes.length}`;
+  // 답글은 처리 단위가 아니므로 개수에서 뺀다.
+  const roots = state.notes.filter(n => !n.parent);
+  const open = roots.filter(n => n.status === "open").length;
+  $("#notecnt").textContent = `open ${open} / total ${roots.length}`;
   $("#filterbtn").textContent = state.showAll ? "이 커밋만" : "전체 보기";
   $("#tabn").textContent = list.length ? `(${list.length})` : "";
 }
@@ -651,7 +785,8 @@ async function drawCli() {
 async function createNote(kind, body) {
   const payload = kind === "commit"
     ? {kind: "commit", commit: state.sel, body}
-    : {kind: "line", commit: state.sel, path: state.composer.path, line: state.composer.line, body};
+    : {kind: "line", commit: state.sel, path: state.composer.path,
+       line: state.composer.line, endLine: state.composer.endLine || 0, body};
   await api("/api/notes", {
     method: "POST",
     headers: {"Content-Type": "application/json"},
@@ -661,6 +796,17 @@ async function createNote(kind, body) {
   await reloadNotes();
   selectTab("tab-notes");
   toast("메모를 저장했습니다");
+}
+
+async function createReply(parentId, body) {
+  await api("/api/notes", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({parent: parentId, body}),
+  });
+  state.replyTo = null;
+  await reloadNotes();
+  toast("답글을 저장했습니다");
 }
 
 async function toggleNote(n) {

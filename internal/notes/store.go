@@ -163,15 +163,78 @@ func (s *Store) Find(id string) *Note {
 // Add 는 메모를 추가한다.
 func (s *Store) Add(n *Note) { s.Notes = append(s.Notes, n) }
 
-// Remove 는 ID 로 메모를 지운다. 지웠으면 true.
+// Remove 는 ID 로 메모를 지운다. 루트를 지우면 달린 답글도 함께 지운다.
+// 하나라도 지웠으면 true.
 func (s *Store) Remove(id string) bool {
-	for i, n := range s.Notes {
-		if n.ID == id {
-			s.Notes = append(s.Notes[:i], s.Notes[i+1:]...)
-			return true
+	id = strings.TrimSpace(id)
+	kept := make([]*Note, 0, len(s.Notes))
+	removed := false
+	for _, n := range s.Notes {
+		// 답글은 부모 없이 남으면 화면에서도 export 에서도 갈 곳이 없다.
+		if n.ID == id || n.Parent == id {
+			removed = true
+			continue
+		}
+		kept = append(kept, n)
+	}
+	if removed {
+		s.Notes = kept
+	}
+	return removed
+}
+
+// Children 은 부모 ID 에 달린 답글을 생성 순으로 돌려준다.
+func (s *Store) Children(id string) []*Note {
+	var out []*Note
+	for _, n := range s.Notes {
+		if n.Parent == id {
+			out = append(out, n)
 		}
 	}
-	return false
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Created.Before(out[j].Created) })
+	return out
+}
+
+// Roots 는 상태로 거른 루트 메모를 돌려준다. 답글은 제외된다.
+//
+// 답글은 스스로 상태를 갖지 않으므로(부모가 처리 단위다) 상태 필터의 대상이 아니다.
+func (s *Store) Roots(status string) []*Note {
+	out := make([]*Note, 0, len(s.Notes))
+	for _, n := range s.Notes {
+		if n.IsReply() {
+			continue
+		}
+		if status == "" || status == "all" || n.Status == status {
+			out = append(out, n)
+		}
+	}
+	sortNotes(out)
+	return out
+}
+
+// SelectThreads 는 상태로 거른 루트와 그 답글을 스레드 순서로 이어 돌려준다.
+// (루트 → 답글들 → 다음 루트 → …) list/export 가 이 순서를 그대로 출력한다.
+func (s *Store) SelectThreads(status string) []*Note {
+	roots := s.Roots(status)
+	out := make([]*Note, 0, len(s.Notes))
+	for _, r := range roots {
+		out = append(out, r)
+		out = append(out, s.Children(r.ID)...)
+	}
+	return out
+}
+
+// ThreadRoot 는 주어진 메모가 속한 스레드의 루트를 돌려준다. 답글이 아니면 자기 자신.
+func (s *Store) ThreadRoot(n *Note) *Note {
+	// 부모 사슬이 깨져 있어도(부모가 지워진 옛 파일 등) 무한 루프에 빠지지 않게 제한을 둔다.
+	for i := 0; n != nil && n.IsReply() && i < 16; i++ {
+		p := s.Find(n.Parent)
+		if p == nil {
+			return n
+		}
+		n = p
+	}
+	return n
 }
 
 // Select 는 상태로 거른 메모를 돌려준다. status 가 "" 나 "all" 이면 전부.
@@ -183,11 +246,16 @@ func (s *Store) Select(status string) []*Note {
 			out = append(out, n)
 		}
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		if (out[i].Status == StatusOpen) != (out[j].Status == StatusOpen) {
-			return out[i].Status == StatusOpen
-		}
-		return out[i].Created.Before(out[j].Created)
-	})
+	sortNotes(out)
 	return out
+}
+
+// sortNotes 는 open 을 앞으로, 그 안에서는 생성 순으로 정렬한다.
+func sortNotes(list []*Note) {
+	sort.SliceStable(list, func(i, j int) bool {
+		if (list[i].Status == StatusOpen) != (list[j].Status == StatusOpen) {
+			return list[i].Status == StatusOpen
+		}
+		return list[i].Created.Before(list[j].Created)
+	})
 }

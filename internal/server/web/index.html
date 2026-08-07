@@ -273,8 +273,16 @@ body.resizing-x{cursor:col-resize;user-select:none}
 .dline .txt{flex:1;white-space:pre;padding-right:18px}
 .dline.add{background:var(--add-bg)} .dline.add .sig{color:var(--add)}
 .dline.del{background:var(--del-bg)} .dline.del .sig{color:var(--del)}
+/* 메모가 덮는 줄. 범위면 시작~끝 전체에 띠가 걸리고, 위아래 끝만 모서리를 준다. */
 .dline.noted .gut{box-shadow:inset 3px 0 0 var(--accent-solid)}
 .dline.noted .gut .addbtn{color:var(--accent-solid)}
+.dline.noted .txt{background:var(--accent-bg)}
+.dline.noted-top .txt{box-shadow:inset 0 1px 0 var(--accent-line)}
+.dline.noted-bot .txt{box-shadow:inset 0 -1px 0 var(--accent-line)}
+.dline.noted-top.noted-bot .txt{box-shadow:inset 0 1px 0 var(--accent-line),inset 0 -1px 0 var(--accent-line)}
+/* 범위를 고르는 중인 줄 — 저장 전 미리보기 */
+.dline.picking .txt{background:var(--accent-bg);opacity:.95}
+.dline.picking .gut{box-shadow:inset 3px 0 0 var(--accent);background:var(--accent-bg)}
 
 /* 문법 강조 */
 .tok-kw{color:var(--syn-kw)}
@@ -301,6 +309,15 @@ body.resizing-x{cursor:col-resize;user-select:none}
 .inote .ires{margin-top:6px;font-size:12px;color:var(--muted);border-left:2px solid var(--line);
   padding-left:9px;max-width:72ch;line-height:1.5}
 .inote .iact{margin-top:9px;display:flex;gap:6px}
+/* 답글 — 부모 박스 안에서 한 칸 들여 대화처럼 이어 붙는다. */
+.inote .ireply{margin-top:9px;padding-left:11px;border-left:2px solid var(--accent-line)}
+.inote.done .ireply{border-left-color:var(--line)}
+.inote .ireply .ih{margin-bottom:3px}
+.inote .ireply .iat{flex:1;color:var(--muted)}
+.inote .ireply .ibody{font-size:12.5px;color:var(--ink-soft,var(--ink))}
+.composer.reply{margin-top:9px;border:1px solid var(--accent-line);border-radius:6px;
+  padding:8px;background:var(--raise);position:static}
+.composer.reply textarea{min-height:56px}
 
 .composer{background:var(--accent-bg);border-top:1px solid var(--accent-line);
   border-bottom:1px solid var(--accent-line);padding:10px 14px 11px 92px;position:sticky;left:0}
@@ -357,6 +374,10 @@ body.resizing-x{cursor:col-resize;user-select:none}
 .note .nres{margin-top:6px;font-size:11.5px;color:var(--muted);border-left:2px solid var(--line);
   padding-left:8px;white-space:pre-wrap;line-height:1.5}
 .note .nact{margin-top:8px;display:flex;gap:6px}
+/* 레일에서도 답글은 한 칸 들여 붙인다. */
+.note .nreply{margin-top:7px;padding-left:9px;border-left:2px solid var(--line-soft)}
+.note .nreply .nid{display:block;margin-bottom:2px;color:var(--muted)}
+.note .nreply .nbody{font-size:12px;color:var(--muted)}
 .emptyish{padding:26px 16px;color:var(--muted);font-size:12.5px;text-align:center;line-height:1.7}
 .cli{margin:0;padding:12px 13px;font-family:var(--mono);font-size:11.5px;line-height:1.7;
   white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink-2)}
