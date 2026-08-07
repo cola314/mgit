@@ -64,7 +64,7 @@ func runOpen(args []string) error {
 		url := "http://" + existing
 		fmt.Printf("이미 실행 중입니다 → %s (%s 로 이동)\n", url, repo.Short(sha))
 		if !*noBrowser && !*printURL {
-			openBrowser(url)
+			openWindow(url, windowProfileDir(repo.Root))
 		}
 		return nil
 	}
