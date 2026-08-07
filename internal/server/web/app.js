@@ -970,6 +970,18 @@ async function pollState() {
   try {
     const st = await api("/api/state");
 
+    // 커밋·amend·브랜치 전환으로 HEAD 가 바뀌면 목록을 다시 읽는다.
+    if (st.head && st.head !== state.head) {
+      const first = state.head === undefined;
+      state.head = st.head;
+      if (!first) {
+        await loadLog();
+        if (!state.byId.has(state.sel)) await select(state.commits[0] && state.commits[0].sha);
+        else render();
+        toast("새 커밋을 반영했습니다");
+      }
+    }
+
     if (st.notesRev !== state.notesRev) {
       const first = state.notesRev === undefined;
       state.notesRev = st.notesRev;
@@ -1005,6 +1017,7 @@ async function boot() {
     const st = await api("/api/state");
     state.seq = st.seq;
     state.notesRev = st.notesRev;
+    state.head = st.head;
     if (st.explicit) setView("detail");
 
     // URL 쿼리가 서버가 준 target 보다 우선한다. 주소를 직접 띄운 쪽이

@@ -179,11 +179,17 @@ func (s *Server) handleState(w http.ResponseWriter, _ *http.Request) {
 	s.mu.Lock()
 	target, seq, explicit := s.target, s.seq, s.explicit
 	s.mu.Unlock()
+
+	// HEAD 를 같이 실어 보낸다. 커밋·amend·브랜치 전환이 일어나면 UI 가 목록을
+	// 다시 읽어야 하는데, 알려주지 않으면 방금 만든 커밋이 화면에 영영 안 뜬다.
+	head, _ := s.repo.Run("rev-parse", "HEAD")
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"target":   target,
 		"seq":      seq,
 		"explicit": explicit,
 		"notesRev": s.notesRev(),
+		"head":     head,
 	})
 }
 
