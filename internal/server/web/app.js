@@ -644,14 +644,18 @@ function render() {
 const COLS = {graph: null, au: 82, dt: 104, sh: 74};
 // 손잡이가 어느 쪽 경계에 붙어 있는지 — 그래프만 오른쪽 경계다.
 const COL_DIR = {graph: +1, au: -1, dt: -1, sh: -1};
-const COL_KEY = "mgit.cols";
+// v2: 예전에는 좁은 화면에서 작성자·날짜를 0 으로 접어 저장했다. 사용자가 열을
+// 잃어버리고 되돌릴 방법도 못 찾는 문제가 있어 키를 올려 옛 값을 버린다.
+const COL_KEY = "mgit.cols.v2";
 const RAIL_KEY = "mgit.rail.width";
 const RAIL_OPEN_KEY = "mgit.rail.open";
 const NARROW = 900;   // 이 폭 미만이면 기본값을 좁게 잡는다
 
 let COLW = null;   // 현재 컬럼 폭. graph 가 null 이면 자동.
 
-function applyCols() {
+// persist 는 사용자가 직접 조절했을 때만 true 다. 화면 폭에서 자동으로 정한 값을
+// 저장해 버리면, 창을 넓혀도 좁을 때 계산한 폭이 계속 따라붙는다.
+function applyCols(persist) {
   const root = $("#app");
   for (const k of Object.keys(COLS)) {
     const v = k === "graph" && COLW[k] === null ? autoGraphWidth() : COLW[k];
@@ -659,7 +663,9 @@ function applyCols() {
     // 접힌 열은 여백까지 0 이어야 완전히 사라진다.
     root.style.setProperty(`--p-${k}`, (v > 0 ? 12 : 0) + "px");
   }
-  try { localStorage.setItem(COL_KEY, JSON.stringify(COLW)); } catch (_) {}
+  if (persist) {
+    try { localStorage.setItem(COL_KEY, JSON.stringify(COLW)); } catch (_) {}
+  }
 }
 
 // 레인 수로 정해지는 그래프 폭. 좁은 화면에서는 상한을 둔다 — 레인이 14개면
@@ -682,9 +688,10 @@ function loadCols() {
       return out;
     }
   } catch (_) {}
-  // 저장된 값이 없을 때: 좁은 화면이면 작성자·날짜를 접고 SHA 만 남긴다.
+  // 저장된 값이 없을 때: 좁은 화면이면 좁게 잡되 숨기지는 않는다.
+  // 열을 0 으로 접는 건 사용자가 직접 끌었을 때만 일어나야 한다.
   return window.innerWidth < NARROW
-    ? {graph: null, au: 0, dt: 0, sh: 74}
+    ? {graph: null, au: 56, dt: 78, sh: 70}
     : {...COLS};
 }
 
@@ -697,7 +704,7 @@ function initColumns() {
   for (const grip of document.querySelectorAll("#chead .grip")) {
     const key = grip.parentElement.dataset.col;
     const cur = () => (key === "graph" && COLW[key] === null ? autoGraphWidth() : COLW[key]);
-    const nudge = d => { COLW[key] = clamp(cur() + d, 0, 600); applyCols(); };
+    const nudge = d => { COLW[key] = clamp(cur() + d, 0, 600); applyCols(true); };
 
     grip.addEventListener("mousedown", e => {
       dragging = key; startX = e.clientX; startW = cur();
@@ -710,13 +717,22 @@ function initColumns() {
       if (e.key === "ArrowLeft") { e.preventDefault(); nudge(-step); }
       if (e.key === "ArrowRight") { e.preventDefault(); nudge(step); }
     });
-    // 더블클릭하면 자동 폭으로 되돌린다 (그래프 열만 의미가 있다).
+    // 손잡이 더블클릭 = 그 열만 기본값 복원.
     grip.addEventListener("dblclick", e => {
       e.preventDefault();
+      e.stopPropagation();
       COLW[key] = COLS[key];
-      applyCols();
+      applyCols(true);
     });
   }
+
+  // 헤더 빈 곳 더블클릭 = 전체 복원. 열을 0 까지 접어 버리면 손잡이를 다시 잡기
+  // 어려우므로 빠져나올 길이 하나는 있어야 한다.
+  $("#chead").addEventListener("dblclick", () => {
+    COLW = {...COLS};
+    applyCols(true);
+    toast("열 너비를 기본값으로 되돌렸습니다");
+  });
 
   window.addEventListener("mousemove", e => {
     if (!dragging) return;
@@ -728,6 +744,7 @@ function initColumns() {
     document.querySelectorAll("#chead .grip").forEach(g => g.classList.remove("dragging"));
     document.body.classList.remove("resizing-x");
     dragging = null;
+    applyCols(true);
   });
   window.addEventListener("resize", () => { if (COLW.graph === null) applyCols(); });
 }

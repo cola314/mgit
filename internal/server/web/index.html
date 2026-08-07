@@ -163,8 +163,6 @@ body.resizing-x{cursor:col-resize;user-select:none}
   overflow:hidden;white-space:nowrap}
 .chead .ch-dot{flex:none;width:22px}
 .chead .ch-subj{flex:1;min-width:0;padding-left:2px}
-/* 그래프 열의 손잡이는 오른쪽 경계에 있다 — 오른쪽으로 끌면 넓어진다. */
-.chead .grip-r{left:auto;right:-3px}
 .chead .ch-col{position:relative;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
   text-align:right}
 .chead .ch-col[data-col="au"]{width:var(--w-au,82px);padding-right:var(--p-au,12px)}
@@ -174,6 +172,9 @@ body.resizing-x{cursor:col-resize;user-select:none}
 .chead .grip::before{content:"";position:absolute;left:3px;top:4px;bottom:4px;width:1px;
   background:var(--line)}
 .chead .grip:hover::before,.chead .grip.dragging::before{background:var(--l0);width:2px;left:2px}
+/* 그래프 열만 손잡이가 오른쪽 경계(설명과의 사이)에 붙는다.
+   .grip 뒤에 와야 left 를 덮어쓴다 — 명시도가 같으므로 순서가 곧 우선순위다. */
+.chead .grip-r{left:auto;right:-3px}
 .chip{flex:none;display:inline-block;font-family:var(--mono);font-size:10px;padding:1px 5px;
   border-radius:3px;border:1px solid;margin-right:5px;white-space:nowrap;max-width:210px;
   overflow:hidden;text-overflow:ellipsis;vertical-align:1px;line-height:1.4}
