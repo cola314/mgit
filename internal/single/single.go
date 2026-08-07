@@ -119,10 +119,24 @@ func Notify(addr, path string, payload any) error {
 	return nil
 }
 
-// HandlePing 은 서버가 PingPath 에 등록해야 하는 핸들러다.
-func HandlePing(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	io.WriteString(w, pingToken)
+// HandlePing 은 서버가 PingPath 에 등록해야 하는 핸들러를 만든다.
+//
+// healthy 는 "이 인스턴스가 실제로 일을 할 수 있는가"를 확인한다. 살아만 있으면
+// 된다고 보면 안 된다. 뷰어를 띄운 셸이 죽으면 프로세스는 남아 HTTP 에 응답하지만
+// git 자식 프로세스를 더 못 띄워(Windows 에서 0xc0000142) 아무것도 못 하는
+// 좀비가 된다. 그 상태를 "실행 중"으로 판정하면 새 인스턴스가 영영 못 뜬다.
+func HandlePing(healthy func() error) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		if healthy != nil {
+			if err := healthy(); err != nil {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				io.WriteString(w, "unhealthy: "+err.Error())
+				return
+			}
+		}
+		io.WriteString(w, pingToken)
+	}
 }
 
 // probe 는 포트 파일을 읽어 그 주소에 살아 있는 mgit 이 있는지 확인한다.

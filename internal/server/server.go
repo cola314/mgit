@@ -43,9 +43,16 @@ func New(repo *gitx.Repo, target string, explicit bool) *Server {
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.mux.ServeHTTP(w, r) }
 
+// healthy 는 이 인스턴스가 아직 git 을 실행할 수 있는지 본다.
+// 뷰어를 띄운 셸이 죽으면 프로세스는 남지만 자식 프로세스를 못 띄우게 된다.
+func (s *Server) healthy() error {
+	_, err := s.repo.Run("rev-parse", "--git-dir")
+	return err
+}
+
 func (s *Server) routes() {
 	// 메서드를 붙여야 한다. 메서드 없는 패턴은 아래 "GET /" 과 충돌해 패닉이 난다.
-	s.mux.HandleFunc("GET "+single.PingPath, single.HandlePing)
+	s.mux.HandleFunc("GET "+single.PingPath, single.HandlePing(s.healthy))
 
 	s.mux.HandleFunc("GET /api/repo", s.handleRepo)
 	s.mux.HandleFunc("GET /api/log", s.handleLog)

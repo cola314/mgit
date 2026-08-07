@@ -110,7 +110,8 @@ function fmtDate(iso) {
 function drawRows() {
   const box = $("#rows");
   box.textContent = "";
-  const gw = graphWidth();
+  // 그래프 열 폭이 자동이면 레인 수가 바뀔 때마다 다시 계산한다.
+  if (COLW && COLW.graph === null) applyCols();
 
   for (const c of state.commits) {
     const row = el("div", "crow" + (c.parents && c.parents.length > 1 ? " merge" : "")
@@ -120,9 +121,7 @@ function drawRows() {
     row.setAttribute("role", "button");
     row.setAttribute("aria-label", `${c.short} ${c.subject}`);
 
-    const sp = el("div", "gspace");
-    sp.style.width = (gw + 8) + "px";
-    row.appendChild(sp);
+    row.appendChild(el("div", "gspace"));
 
     const nd = el("div", "notedot");
     const cnt = state.noteCounts[c.sha] || 0;
@@ -594,6 +593,7 @@ async function select(sha) {
   }
   drawDiff();
   drawGraphDetail();
+  syncURL();
 }
 
 function setView(v) {
@@ -606,6 +606,7 @@ function setView(v) {
   state.composer = null;
   drawNotes();
   updateCmd();
+  syncURL();
 }
 
 function updateCmd() {
@@ -634,6 +635,188 @@ function toast(msg) {
 
 function render() {
   drawGraph(); drawRows(); drawDetail(); drawDiff(); drawGraphDetail(); drawNotes();
+}
+
+/* ── 레이아웃: 컬럼 너비 / 메모 레일 ───────────────────────────── */
+// 사이드 패널처럼 좁은 화면에서는 메타 컬럼이 설명을 잡아먹는다. 폭을 직접
+// 조절할 수 있어야 하고, 0 까지 줄이면 아예 숨겨진다.
+// graph 는 값이 null 이면 "레인 수에 맞춰 자동". 사용자가 한 번 끌면 그 값으로 고정된다.
+const COLS = {graph: null, au: 82, dt: 104, sh: 74};
+// 손잡이가 어느 쪽 경계에 붙어 있는지 — 그래프만 오른쪽 경계다.
+const COL_DIR = {graph: +1, au: -1, dt: -1, sh: -1};
+const COL_KEY = "mgit.cols";
+const RAIL_KEY = "mgit.rail.width";
+const RAIL_OPEN_KEY = "mgit.rail.open";
+const NARROW = 900;   // 이 폭 미만이면 기본값을 좁게 잡는다
+
+let COLW = null;   // 현재 컬럼 폭. graph 가 null 이면 자동.
+
+function applyCols() {
+  const root = $("#app");
+  for (const k of Object.keys(COLS)) {
+    const v = k === "graph" && COLW[k] === null ? autoGraphWidth() : COLW[k];
+    root.style.setProperty(`--w-${k}`, v + "px");
+    // 접힌 열은 여백까지 0 이어야 완전히 사라진다.
+    root.style.setProperty(`--p-${k}`, (v > 0 ? 12 : 0) + "px");
+  }
+  try { localStorage.setItem(COL_KEY, JSON.stringify(COLW)); } catch (_) {}
+}
+
+// 레인 수로 정해지는 그래프 폭. 좁은 화면에서는 상한을 둔다 — 레인이 14개면
+// 240px 이 되어 사이드 패널에서 설명이 남지 않는다.
+function autoGraphWidth() {
+  const natural = graphWidth() + 8;
+  return window.innerWidth < NARROW ? Math.min(natural, 120) : natural;
+}
+
+function loadCols() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(COL_KEY) || "null");
+    if (saved && typeof saved === "object") {
+      const out = {};
+      for (const k of Object.keys(COLS)) {
+        out[k] = saved[k] === null || saved[k] === undefined
+          ? COLS[k]
+          : clamp(Number(saved[k]) || 0, 0, 600);
+      }
+      return out;
+    }
+  } catch (_) {}
+  // 저장된 값이 없을 때: 좁은 화면이면 작성자·날짜를 접고 SHA 만 남긴다.
+  return window.innerWidth < NARROW
+    ? {graph: null, au: 0, dt: 0, sh: 74}
+    : {...COLS};
+}
+
+function initColumns() {
+  COLW = loadCols();
+  applyCols();
+
+  let dragging = null, startX = 0, startW = 0;
+
+  for (const grip of document.querySelectorAll("#chead .grip")) {
+    const key = grip.parentElement.dataset.col;
+    const cur = () => (key === "graph" && COLW[key] === null ? autoGraphWidth() : COLW[key]);
+    const nudge = d => { COLW[key] = clamp(cur() + d, 0, 600); applyCols(); };
+
+    grip.addEventListener("mousedown", e => {
+      dragging = key; startX = e.clientX; startW = cur();
+      grip.classList.add("dragging");
+      document.body.classList.add("resizing-x");
+      e.preventDefault();
+    });
+    grip.addEventListener("keydown", e => {
+      const step = (e.shiftKey ? 32 : 8) * COL_DIR[key];
+      if (e.key === "ArrowLeft") { e.preventDefault(); nudge(-step); }
+      if (e.key === "ArrowRight") { e.preventDefault(); nudge(step); }
+    });
+    // 더블클릭하면 자동 폭으로 되돌린다 (그래프 열만 의미가 있다).
+    grip.addEventListener("dblclick", e => {
+      e.preventDefault();
+      COLW[key] = COLS[key];
+      applyCols();
+    });
+  }
+
+  window.addEventListener("mousemove", e => {
+    if (!dragging) return;
+    COLW[dragging] = clamp(startW + (e.clientX - startX) * COL_DIR[dragging], 0, 600);
+    applyCols();
+  });
+  window.addEventListener("mouseup", () => {
+    if (!dragging) return;
+    document.querySelectorAll("#chead .grip").forEach(g => g.classList.remove("dragging"));
+    document.body.classList.remove("resizing-x");
+    dragging = null;
+  });
+  window.addEventListener("resize", () => { if (COLW.graph === null) applyCols(); });
+}
+
+function setRail(open) {
+  $("#app").dataset.rail = open ? "on" : "off";
+  const btn = $("#togglerail");
+  btn.textContent = open ? "메모 ▶" : "◀ 메모";
+  btn.setAttribute("aria-expanded", String(open));
+  try { localStorage.setItem(RAIL_OPEN_KEY, open ? "1" : "0"); } catch (_) {}
+}
+
+function initRail() {
+  const sp = $("#railsplit"), app = $("#app");
+  const limit = w => clamp(w, 220, Math.max(260, window.innerWidth - 320));
+
+  const saved = parseInt(localStorage.getItem(RAIL_KEY) || "", 10);
+  const initial = isNaN(saved) ? (window.innerWidth < NARROW ? 300 : 396) : saved;
+  app.style.setProperty("--rail-w", limit(initial) + "px");
+
+  // 좁은 화면에서는 처음부터 접어 둔다. diff 를 볼 폭이 남지 않기 때문이다.
+  const savedOpen = localStorage.getItem(RAIL_OPEN_KEY);
+  setRail(savedOpen === null ? window.innerWidth >= NARROW : savedOpen !== "0");
+
+  $("#togglerail").onclick = () => setRail(app.dataset.rail === "off");
+
+  let dragging = false, startX = 0, startW = 0;
+  const curW = () => parseInt(getComputedStyle(app).getPropertyValue("--rail-w"), 10) || 396;
+  const persist = () => localStorage.setItem(RAIL_KEY, String(curW()));
+
+  sp.addEventListener("mousedown", e => {
+    dragging = true; startX = e.clientX; startW = curW();
+    sp.classList.add("dragging");
+    document.body.classList.add("resizing-x");
+    e.preventDefault();
+  });
+  window.addEventListener("mousemove", e => {
+    if (!dragging) return;
+    app.style.setProperty("--rail-w", limit(startW - (e.clientX - startX)) + "px");
+  });
+  window.addEventListener("mouseup", () => {
+    if (!dragging) return;
+    dragging = false;
+    sp.classList.remove("dragging");
+    document.body.classList.remove("resizing-x");
+    persist();
+  });
+  sp.addEventListener("keydown", e => {
+    const step = e.shiftKey ? 48 : 14;
+    if (e.key === "ArrowLeft") { e.preventDefault(); app.style.setProperty("--rail-w", limit(curW() + step) + "px"); persist(); }
+    if (e.key === "ArrowRight") { e.preventDefault(); app.style.setProperty("--rail-w", limit(curW() - step) + "px"); persist(); }
+  });
+  window.addEventListener("resize", () => {
+    app.style.setProperty("--rail-w", limit(curW()) + "px");
+  });
+}
+
+/* ── URL 쿼리 파라미터 ──────────────────────────────────────────── */
+// 주소만으로 화면을 재현할 수 있어야 한다. 사이드 패널에서는 셸을 거치지 않고
+// URL 을 바로 띄우는 게 빠르므로 CLI 의 -c 와 같은 일을 ?c= 로도 할 수 있게 한다.
+//   ?c=<리비전>   HEAD~3, 태그, 브랜치, 짧은 SHA 등 git 문법 그대로
+//   ?view=graph|detail
+function syncURL() {
+  const c = state.byId.get(state.sel);
+  const q = new URLSearchParams();
+  if (c) q.set("c", c.short);
+  // view 는 항상 적는다. 빼면 새로고침 때 "c 만 있으면 detail" 규칙에 걸려
+  // 그래프 뷰가 상세 뷰로 튄다.
+  q.set("view", state.view);
+  history.replaceState(null, "", location.pathname + "?" + q);
+}
+
+async function applyURL() {
+  const q = new URLSearchParams(location.search);
+  const rev = q.get("c");
+  const view = q.get("view");
+  let target = null;
+
+  if (rev) {
+    try {
+      const d = await api(`/api/commit/${encodeURIComponent(rev)}`);
+      target = d.sha;
+    } catch (e) {
+      toast(`?c=${rev} 를 찾지 못했습니다`);
+    }
+  }
+  if (view === "detail" || (rev && view !== "graph")) setView("detail");
+  else if (view === "graph") setView("graph");
+  return target;
 }
 
 /* ── 테마 ───────────────────────────────────────────────────────── */
@@ -777,7 +960,11 @@ async function boot() {
     state.seq = st.seq;
     state.notesRev = st.notesRev;
     if (st.explicit) setView("detail");
-    await select(st.target || (state.commits[0] && state.commits[0].sha));
+
+    // URL 쿼리가 서버가 준 target 보다 우선한다. 주소를 직접 띄운 쪽이
+    // 더 최근 의도이기 때문이다.
+    const fromURL = await applyURL();
+    await select(fromURL || st.target || (state.commits[0] && state.commits[0].sha));
     render();
   } catch (e) {
     document.body.innerHTML = `<div class="err" style="margin:24px">시작 실패: ${e.message}</div>`;
@@ -786,6 +973,8 @@ async function boot() {
 
   initTheme();
   initSplitter();
+  initColumns();
+  initRail();
 
   $("#rows").addEventListener("click", e => {
     const row = e.target.closest(".crow"); if (!row) return;

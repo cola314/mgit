@@ -2,6 +2,7 @@ package single
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -14,7 +15,7 @@ func serve(t *testing.T, inst *Instance) *received {
 	t.Helper()
 	got := &received{}
 	mux := http.NewServeMux()
-	mux.HandleFunc(PingPath, HandlePing)
+	mux.HandleFunc(PingPath, HandlePing(nil))
 	mux.HandleFunc("/api/goto", func(w http.ResponseWriter, r *http.Request) {
 		var payload map[string]string
 		json.NewDecoder(r.Body).Decode(&payload)
@@ -228,6 +229,32 @@ func TestForeignServerOnPortIsRejected(t *testing.T) {
 	}
 	if second == nil {
 		t.Fatalf("mgit 이 아닌 서버(%s)에 붙었다", existing)
+	}
+	second.Release()
+}
+
+// 프로세스는 살아 있지만 일을 못 하는 인스턴스(셸이 죽어 git 을 못 띄우는 상태)는
+// "실행 중"으로 보면 안 된다. 그렇지 않으면 새 인스턴스가 영영 못 뜬다.
+func TestUnhealthyInstanceIsReclaimed(t *testing.T) {
+	isolateCache(t)
+	root := t.TempDir()
+
+	first, _, err := Acquire(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc(PingPath, HandlePing(func() error { return errors.New("git 을 실행할 수 없습니다") }))
+	srv := &http.Server{Handler: mux}
+	go srv.Serve(first.Listener)
+	defer srv.Close()
+
+	second, existing, err := Acquire(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second == nil {
+		t.Fatalf("좀비 인스턴스(%s)에 붙었다 — 새 인스턴스를 띄우지 못한다", existing)
 	}
 	second.Release()
 }

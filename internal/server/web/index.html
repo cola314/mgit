@@ -97,11 +97,19 @@ body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);
 .iconbtn:hover{color:var(--ink);border-color:var(--muted)}
 .iconbtn:focus-visible{outline:2px solid var(--l0);outline-offset:1px}
 
-.body{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 396px;
+.body{flex:1;min-height:0;display:grid;
+  grid-template-columns:minmax(0,1fr) var(--rail-w,396px);
   grid-template-rows:minmax(0,1fr)}
 .pane{min-width:0;min-height:0;display:flex;flex-direction:column;background:var(--panel)}
 .graphpane,.diffpane{grid-column:1;grid-row:1}
-.rail{grid-column:2;grid-row:1;border-left:1px solid var(--line)}
+.rail{grid-column:2;grid-row:1;border-left:1px solid var(--line);position:relative}
+/* 메모 레일을 접으면 diff 가 폭을 다 쓴다. 사이드 패널처럼 좁은 화면에서 필요하다. */
+.app[data-rail="off"] .body{grid-template-columns:minmax(0,1fr)}
+.app[data-rail="off"] .rail{display:none}
+.vsplit{position:absolute;left:-3px;top:0;bottom:0;width:7px;cursor:col-resize;z-index:6}
+.vsplit:hover,.vsplit.dragging{background:var(--sel-line)}
+.vsplit:focus-visible{outline:2px solid var(--l0);outline-offset:-2px}
+body.resizing-x{cursor:col-resize;user-select:none}
 .app[data-view="graph"] .diffpane{display:none}
 .app[data-view="detail"] .graphpane{display:none}
 /* 그래프 뷰에서는 메모 레일을 숨긴다. 목록을 훑는 화면이라 폭이 아쉽고,
@@ -120,7 +128,12 @@ body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);
 
 /* ── 커밋 목록 ─────────────────────────────────────────────────── */
 .ginner{position:relative}
-.lanes{position:absolute;left:0;top:0;pointer-events:none}
+/* 그래프 열도 폭을 줄일 수 있어야 한다. 레인이 많으면(14개면 240px) 좁은 화면에서
+   설명을 다 잡아먹는다. 줄이면 바깥 레인부터 잘려 나간다 — 잘라도 주 계보는 남는다. */
+.lanesclip{position:absolute;left:0;top:0;bottom:0;width:var(--w-graph,240px);
+  overflow:hidden;pointer-events:none}
+.lanes{position:absolute;left:0;top:0}
+.gspace{flex:none;width:var(--w-graph,240px)}
 .crow{display:flex;align-items:center;height:var(--row);cursor:pointer;padding-right:13px;
   border-left:2px solid transparent}
 .crow:hover{background:var(--raise)}
@@ -130,11 +143,37 @@ body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);
 .csubj{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
   font-size:13px;color:var(--ink);padding-right:14px}
 .crow.merge .csubj{color:var(--ink-2)}
-.cmeta{flex:none;display:flex;gap:16px;align-items:center;font-family:var(--mono);font-size:11px;
+/* 메타 컬럼은 폭을 조절할 수 있다(0 까지 줄이면 숨겨진다). 좁은 사이드 패널에서
+   설명이 잘리지 않게 하려면 필수. 헤더와 행이 같은 변수를 써야 어긋나지 않는다. */
+.cmeta{flex:none;display:flex;align-items:center;font-family:var(--mono);font-size:11px;
   color:var(--muted);font-variant-numeric:tabular-nums}
-.cmeta .au{width:82px;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.cmeta .dt{width:98px;text-align:right}
-.cmeta .sh{width:68px;text-align:right;color:var(--ink-2)}
+/* 여백은 별도 변수로 둔다. border-box 에서 padding 은 최소 폭이 되므로, 폭을 0 으로
+   접어도 padding 만큼 남아 글자가 삐져나온다. 접힐 때 같이 0 이 되어야 한다. */
+.cmeta span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right}
+.cmeta .au{width:var(--w-au,82px);padding-right:var(--p-au,12px)}
+.cmeta .dt{width:var(--w-dt,104px);padding-right:var(--p-dt,12px)}
+.cmeta .sh{width:var(--w-sh,74px);color:var(--ink-2)}
+
+/* 행과 같은 우측 여백을 줘야 컬럼 경계가 어긋나지 않는다 (.crow 의 padding-right). */
+.chead{display:flex;align-items:center;height:24px;background:var(--sunk);
+  border-bottom:1px solid var(--line);position:sticky;top:0;z-index:4;padding-right:13px;
+  font-family:var(--mono);font-size:10px;letter-spacing:.06em;color:var(--muted);
+  text-transform:uppercase;user-select:none}
+.chead .ch-graph{flex:none;width:var(--w-graph,240px);position:relative;padding-left:3px;
+  overflow:hidden;white-space:nowrap}
+.chead .ch-dot{flex:none;width:22px}
+.chead .ch-subj{flex:1;min-width:0;padding-left:2px}
+/* 그래프 열의 손잡이는 오른쪽 경계에 있다 — 오른쪽으로 끌면 넓어진다. */
+.chead .grip-r{left:auto;right:-3px}
+.chead .ch-col{position:relative;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  text-align:right}
+.chead .ch-col[data-col="au"]{width:var(--w-au,82px);padding-right:var(--p-au,12px)}
+.chead .ch-col[data-col="dt"]{width:var(--w-dt,104px);padding-right:var(--p-dt,12px)}
+.chead .ch-col[data-col="sh"]{width:var(--w-sh,74px)}
+.chead .grip{position:absolute;left:-3px;top:0;bottom:0;width:7px;cursor:col-resize;z-index:2}
+.chead .grip::before{content:"";position:absolute;left:3px;top:4px;bottom:4px;width:1px;
+  background:var(--line)}
+.chead .grip:hover::before,.chead .grip.dragging::before{background:var(--l0);width:2px;left:2px}
 .chip{flex:none;display:inline-block;font-family:var(--mono);font-size:10px;padding:1px 5px;
   border-radius:3px;border:1px solid;margin-right:5px;white-space:nowrap;max-width:210px;
   overflow:hidden;text-overflow:ellipsis;vertical-align:1px;line-height:1.4}
@@ -337,7 +376,7 @@ try {
 </script>
 </head>
 <body>
-<div class="app" id="app" data-view="graph" data-gdetail="on">
+<div class="app" id="app" data-view="graph" data-gdetail="on" data-rail="on">
   <div class="titlebar">
     <div class="repo" id="repo">…</div>
     <div class="viewsw">
@@ -362,8 +401,20 @@ try {
         <button class="btn sm" id="godetail" type="button">상세 보기 →</button>
       </div>
       <div class="scroller" id="gscroll">
+        <div class="chead" id="chead">
+          <div class="ch-graph" data-col="graph">그래프<span class="grip grip-r" tabindex="0"
+               role="separator" aria-label="그래프 열 너비"></span></div>
+          <div class="ch-dot"></div>
+          <div class="ch-subj">설명</div>
+          <div class="ch-col" data-col="au"><span class="grip" tabindex="0" role="separator"
+               aria-label="작성자 열 너비"></span>작성자</div>
+          <div class="ch-col" data-col="dt"><span class="grip" tabindex="0" role="separator"
+               aria-label="날짜 열 너비"></span>날짜</div>
+          <div class="ch-col" data-col="sh"><span class="grip" tabindex="0" role="separator"
+               aria-label="커밋 열 너비"></span>커밋</div>
+        </div>
         <div class="ginner" id="ginner">
-          <svg class="lanes" id="lanes" aria-hidden="true"></svg>
+          <div class="lanesclip"><svg class="lanes" id="lanes" aria-hidden="true"></svg></div>
           <div class="rows" id="rows"></div>
         </div>
       </div>
@@ -380,12 +431,16 @@ try {
         <button class="btn sm" id="gograph" type="button">← 그래프</button>
         <h2>변경 내용</h2>
         <div class="meta" id="diffmeta"></div>
+        <button class="btn sm" id="togglerail" type="button" aria-expanded="true"
+                title="메모 영역 접기/펼치기 (경계선 드래그로 너비 조절)">메모 ▶</button>
       </div>
       <div class="cdetail" id="cdetail"></div>
       <div class="scroller" id="dscroll"><div class="diffbody" id="diffbody"></div></div>
     </section>
 
     <aside class="pane rail">
+      <div class="vsplit" id="railsplit" tabindex="0" role="separator"
+           aria-orientation="vertical" aria-label="메모 영역 너비 조절"></div>
       <div class="tabs" role="tablist">
         <button class="tab" id="tab-notes" role="tab" aria-selected="true" aria-controls="p-notes" type="button">메모<span class="n" id="tabn"></span></button>
         <button class="tab" id="tab-cli" role="tab" aria-selected="false" aria-controls="p-cli" type="button">note export</button>
