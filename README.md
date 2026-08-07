@@ -24,9 +24,10 @@ go build -o mgit.exe ./cmd/mgit
 
 ```bash
 mgit                              # 현재 저장소 뷰어 열기
-mgit path/to/repo                 # 특정 저장소
-mgit . -c caf6ab321               # 그 커밋의 상세 화면으로 바로
+mgit ../some-repo                 # 특정 저장소
+mgit . -c 3c14afe                 # 그 커밋의 상세 화면으로 바로
 mgit . -c HEAD~3                  # git 리비전 문법 그대로
+mgit . -print-url                 # 주소만 출력 (브라우저 안 염)
 
 mgit note add Foo.java:120 -m "여기 null 체크 빠진 듯"
 mgit note add -c HEAD -m "이 커밋 통째로 재검토"     # 커밋 단위 메모

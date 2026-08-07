@@ -120,7 +120,7 @@ func TestDanglingParentEdge(t *testing.T) {
 }
 
 // 여러 브랜치가 같은 커밋에서 갈라져 나온 부채꼴 모양.
-// 실제 저장소 이력에서 흔히 나오는 형태다.
+// 기능 브랜치를 하나씩 따서 순서대로 머지하는 저장소에서 흔히 나온다.
 func TestFanOutFanIn(t *testing.T) {
 	items := []Item{
 		{SHA: "m3", Parents: []string{"m2", "f3"}},
