@@ -124,6 +124,11 @@ body.resizing-x{cursor:col-resize;user-select:none}
 .panehead .meta{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--muted);
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
 .panehead .btn{flex:none}
+.chk{flex:none;display:flex;align-items:center;gap:5px;font-size:12px;color:var(--ink-2);
+  cursor:pointer;user-select:none;white-space:nowrap}
+.chk:hover{color:var(--ink)}
+.chk input{margin:0;cursor:pointer;accent-color:var(--l0)}
+.chk input:focus-visible{outline:2px solid var(--l0);outline-offset:2px}
 .scroller{flex:1;min-height:0;overflow:auto}
 
 /* ── 커밋 목록 ─────────────────────────────────────────────────── */
@@ -396,6 +401,9 @@ try {
     <section class="pane graphpane">
       <div class="panehead">
         <h2>커밋 그래프</h2>
+        <label class="chk" title="현재 브랜치(HEAD)와 그 조상만 보여준다">
+          <input type="checkbox" id="scopehead"> 현재 브랜치만
+        </label>
         <div class="meta" id="graphmeta"></div>
         <button class="btn sm" id="togglegd" type="button" aria-expanded="true"
                 title="하단 패널 접기/펼치기 (구분선 더블클릭으로도 됩니다)">▼ 하단 패널</button>

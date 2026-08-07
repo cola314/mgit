@@ -20,6 +20,7 @@ const state = {
   view: "graph",
   showAll: true,
   composer: null,    // {line, path} | "commit"
+  scopeHead: false,  // true 면 현재 브랜치(HEAD)의 조상만
   flashNote: null,
   collapsed: new Set(),
   seq: -1,
@@ -568,6 +569,36 @@ function jumpTo(n) {
   if (t) t.scrollIntoView({block: "center", behavior: "smooth"});
 }
 
+/* ── 브랜치 범위 ────────────────────────────────────────────────── */
+// SourceTree 의 "현재 브랜치만 보기". 체크하면 HEAD 의 조상만 남아 그래프가
+// 한 줄로 정리된다. 레인이 14개씩 되는 저장소에서 특히 쓸모 있다.
+const SCOPE_KEY = "mgit.scope.head";
+
+async function loadLog() {
+  const log = await api("/api/log" + (state.scopeHead ? "?scope=head" : ""));
+  state.commits = log.commits || [];
+  state.layout = log.graph || {nodes: [], edges: [], width: 0};
+  state.byId = new Map(state.commits.map(c => [c.sha, c]));
+  state.noteCounts = log.noteCounts || {};
+}
+
+async function setScopeHead(on) {
+  state.scopeHead = on;
+  $("#scopehead").checked = on;
+  try { localStorage.setItem(SCOPE_KEY, on ? "1" : "0"); } catch (_) {}
+
+  try {
+    await loadLog();
+  } catch (e) {
+    toast("목록을 불러오지 못했습니다: " + e.message);
+    return;
+  }
+  // 걸러진 목록에 지금 보던 커밋이 없으면 맨 위로 옮긴다.
+  if (!state.byId.has(state.sel)) await select(state.commits[0] && state.commits[0].sha);
+  else render();
+  $("#gscroll").scrollTop = 0;
+}
+
 async function select(sha) {
   if (!sha) return;
   state.sel = sha;
@@ -966,12 +997,10 @@ async function boot() {
     repoEl.appendChild(document.createTextNode(" · " + (state.repo.branch || "")));
     document.title = "mgit — " + state.repo.name;
 
-    const log = await api("/api/log");
-    state.commits = log.commits || [];
-    state.layout = log.graph || {nodes: [], edges: [], width: 0};
-    state.byId = new Map(state.commits.map(c => [c.sha, c]));
+    state.scopeHead = localStorage.getItem(SCOPE_KEY) === "1";
+    $("#scopehead").checked = state.scopeHead;
+    await loadLog();
     state.notes = await api("/api/notes?status=all") || [];
-    state.noteCounts = log.noteCounts || {};
 
     const st = await api("/api/state");
     state.seq = st.seq;
@@ -1008,6 +1037,7 @@ async function boot() {
     if (e.key === "ArrowUp" && row.previousElementSibling) { e.preventDefault(); row.previousElementSibling.focus(); }
   });
 
+  $("#scopehead").onchange = e => setScopeHead(e.target.checked);
   $("#v-graph").onclick = () => setView("graph");
   $("#v-detail").onclick = () => setView("detail");
   $("#godetail").onclick = () => setView("detail");

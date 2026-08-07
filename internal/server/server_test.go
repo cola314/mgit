@@ -229,6 +229,66 @@ func TestLogEndpointGraphMatchesCommits(t *testing.T) {
 	}
 }
 
+// scope=head 는 현재 브랜치의 조상만 남긴다 (SourceTree 의 "현재 브랜치만 보기").
+// 테스트 저장소는 main 에 feature 가 머지돼 있으므로 커밋 수는 같지만,
+// feature 브랜치만 가진 ref 는 빠져야 한다.
+func TestLogScopeHead(t *testing.T) {
+	srv, repo := newTestServer(t)
+
+	// main 에서 갈라져 머지되지 않은 브랜치를 하나 더 만든다.
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo.Root
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=tester", "GIT_AUTHOR_EMAIL=t@example.com",
+			"GIT_COMMITTER_NAME=tester", "GIT_COMMITTER_EMAIL=t@example.com",
+			"GIT_AUTHOR_DATE=2026-01-02T03:04:05+09:00",
+			"GIT_COMMITTER_DATE=2026-01-02T03:04:05+09:00")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+	}
+	git("checkout", "-q", "-b", "orphan-work")
+	if err := os.WriteFile(filepath.Join(repo.Root, "Only.go"), []byte("package foo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "-A")
+	git("commit", "-qm", "feat: 머지되지 않은 작업")
+	git("checkout", "-q", "main")
+
+	var all struct {
+		Commits []gitx.Commit `json:"commits"`
+	}
+	get(t, srv, "/api/log", &all)
+
+	var head struct {
+		Commits []gitx.Commit `json:"commits"`
+	}
+	get(t, srv, "/api/log?scope=head", &head)
+
+	if len(head.Commits) >= len(all.Commits) {
+		t.Fatalf("scope=head 가 %d건, 전체가 %d건 — 걸러지지 않았다",
+			len(head.Commits), len(all.Commits))
+	}
+	for _, c := range head.Commits {
+		if strings.Contains(c.Subject, "머지되지 않은") {
+			t.Errorf("현재 브랜치에 없는 커밋이 포함됐다: %s", c.Subject)
+		}
+	}
+	// HEAD 자신은 반드시 있어야 한다.
+	headSHA, _ := repo.ResolveCommit("HEAD")
+	var found bool
+	for _, c := range head.Commits {
+		if c.SHA == headSHA {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("scope=head 결과에 HEAD 가 없다")
+	}
+}
+
 func TestCommitEndpoint(t *testing.T) {
 	srv, repo := newTestServer(t)
 	head, _ := repo.ResolveCommit("HEAD")

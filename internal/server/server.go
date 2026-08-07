@@ -94,7 +94,13 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
-	commits, err := s.repo.Log(gitx.LogOptions{Limit: limit})
+	// scope=head 면 현재 브랜치(HEAD)의 조상만 본다. 기본은 모든 ref.
+	// SourceTree 의 "현재 브랜치만 보기"와 같은 필터다.
+	opt := gitx.LogOptions{Limit: limit}
+	if r.URL.Query().Get("scope") == "head" {
+		opt.Revs = []string{"HEAD"}
+	}
+	commits, err := s.repo.Log(opt)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
