@@ -74,26 +74,73 @@ func TestMergeAllocatesSecondLane(t *testing.T) {
 	}
 }
 
-// 브랜치가 끝나면 그 레인은 다시 쓰여야 한다. 안 그러면 긴 이력에서
-// 레인이 무한정 늘어난다.
+// 브랜치가 끝나면(합류선이 부모에 닿은 뒤) 그 레인은 다시 쓰여야 한다.
+// 안 그러면 긴 이력에서 레인이 무한정 늘어난다.
 func TestLaneIsReusedAfterBranchEnds(t *testing.T) {
 	items := []Item{
 		{SHA: "m1", Parents: []string{"a2", "f1"}},
-		{SHA: "f1", Parents: []string{"a3"}},
+		{SHA: "f1", Parents: []string{"a2"}}, // f1 은 a2 에서 합류 완료
 		{SHA: "a2", Parents: []string{"a3"}},
-		{SHA: "m2", Parents: []string{"a3", "f2"}}, // a3 이후 또 다른 머지
-		{SHA: "f2", Parents: []string{"a4"}},
-		{SHA: "a3", Parents: []string{"a4"}},
-		{SHA: "a4"},
+		{SHA: "m2", Parents: []string{"a3", "f2"}}, // 합류가 끝난 뒤의 머지
+		{SHA: "f2", Parents: []string{"a3"}},
+		{SHA: "a3"},
 	}
 	l := Build(items)
 
 	if l.Width > 3 {
 		t.Errorf("레인 수 = %d, 3 이하를 기대 (레인 재사용 실패)", l.Width)
 	}
+	// f1 의 합류선(레인 1)이 a2 행에서 끝났으므로 m2 는 레인 1을 재사용해야 한다.
+	if got := l.LaneOf("m2"); got != 1 {
+		t.Errorf("m2 레인 = %d, want 1 (합류 완료된 레인 재사용)", got)
+	}
 	// 모든 커밋이 배치돼야 한다.
 	if len(l.Nodes) != len(items) {
 		t.Fatalf("노드 수 = %d, want %d", len(l.Nodes), len(items))
+	}
+}
+
+// 왼쪽으로 합류하는 긴 선이 아직 레인을 타고 내려가는 동안에는 그 레인을
+// 다른 브랜치가 재사용하면 안 된다. 점이 남의 선 위에 찍혀 한 계보처럼 보인다.
+// (릴리스 브랜치 머지 직후 무관한 hotfix 커밋이 다른 브랜치의
+// 합류선 위에 그려졌던 실제 사례)
+//
+//	m    (merge, parents: t, f)
+//	f    (브랜치 팁 → t 로 합류, 선이 레인 1을 타고 t 까지 내려간다)
+//	x1   (무관한 브랜치)
+//	x2   (무관한 브랜치, 부모는 범위 밖)
+//	t    (본선)
+func TestLaneBlockedWhileJoinEdgePassesThrough(t *testing.T) {
+	items := []Item{
+		{SHA: "m", Parents: []string{"t", "f"}},
+		{SHA: "f", Parents: []string{"t"}},
+		{SHA: "x1", Parents: []string{"x2"}},
+		{SHA: "x2", Parents: []string{"gone"}},
+		{SHA: "t"},
+	}
+	l := Build(items)
+
+	fLane := l.LaneOf("f")
+	if got := l.LaneOf("x1"); got == fLane {
+		t.Errorf("x1 이 합류선이 지나가는 레인 %d 를 재사용했다", fLane)
+	}
+	if got := l.LaneOf("x2"); got == fLane {
+		t.Errorf("x2 가 합류선이 지나가는 레인 %d 를 재사용했다", fLane)
+	}
+}
+
+// 화면 바닥까지 흘러나가는 dangling 선의 레인도 재사용 금지.
+func TestLaneBlockedByDanglingEdge(t *testing.T) {
+	items := []Item{
+		{SHA: "m", Parents: []string{"t", "f"}},
+		{SHA: "f", Parents: []string{"gone"}}, // 범위 밖 → 레인 1을 타고 바닥까지
+		{SHA: "x", Parents: []string{"t"}},
+		{SHA: "t"},
+	}
+	l := Build(items)
+
+	if got, f := l.LaneOf("x"), l.LaneOf("f"); got == f {
+		t.Errorf("x 가 dangling 선이 지나가는 레인 %d 를 재사용했다", f)
 	}
 }
 
