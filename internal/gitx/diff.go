@@ -58,7 +58,7 @@ func (r *Repo) Diff(sha, path string, ctxLines int) ([]FileDiff, error) {
 		base = emptyTree
 	}
 	args := []string{
-		"diff", "--no-color", "--no-ext-diff", "-M",
+		"diff", "--no-color", "--no-ext-diff", "--textconv", "-M",
 		"-U" + strconv.Itoa(ctxLines), base, sha,
 	}
 	if path != "" {

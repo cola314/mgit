@@ -139,7 +139,8 @@ func (r *Repo) NumStat(sha string) ([]FileStat, error) {
 	if err != nil {
 		return nil, err
 	}
-	args := []string{"diff", "--numstat", "--no-color", "-M"}
+	// --textconv: xls 등 textconv 필터가 걸린 파일도 증감 줄 수를 세도록 (없으면 "-" 로만 나옴)
+	args := []string{"diff", "--numstat", "--no-color", "--textconv", "-M"}
 	if base == "" {
 		// 루트 커밋: 빈 트리와 비교한다.
 		args = append(args, emptyTree, sha)
