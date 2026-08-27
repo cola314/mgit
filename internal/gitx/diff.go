@@ -31,9 +31,12 @@ type FileDiff struct {
 	Path    string `json:"path"`
 	OldPath string `json:"oldPath,omitempty"`
 	Binary  bool   `json:"binary"`
-	Add     int    `json:"add"`
-	Del     int    `json:"del"`
-	Hunks   []Hunk `json:"hunks"`
+	// ForcedText 는 git 이 바이너리로 취급했지만 내용이 텍스트라 강제로 펼친 경우다.
+	// (.gitattributes 의 `*.conf binary` 같은 선언 때문에 생긴다)
+	ForcedText bool   `json:"forcedText,omitempty"`
+	Add        int    `json:"add"`
+	Del        int    `json:"del"`
+	Hunks      []Hunk `json:"hunks"`
 }
 
 // Renamed 는 파일 경로가 바뀐 변경인지 알려준다.
@@ -68,7 +71,54 @@ func (r *Repo) Diff(sha, path string, ctxLines int) ([]FileDiff, error) {
 	if err != nil {
 		return nil, err
 	}
-	return ParseUnifiedDiff(out), nil
+	files := ParseUnifiedDiff(out)
+	r.unwrapFalseBinaries(files, base, sha, ctxLines)
+	return files, nil
+}
+
+// unwrapFalseBinaries 는 "바이너리"로 나온 파일 중 실제로는 텍스트인 것을 펼친다.
+//
+// git 은 `.gitattributes` 에 `*.conf binary` 처럼 선언돼 있으면 내용과 무관하게
+// diff 를 내주지 않는다. 사람이 읽어야 하는 설정 파일이 이렇게 묶여 있는 저장소가
+// 흔해서, 그런 파일은 `--text` 로 다시 뽑아
+// 보여준다. NUL 이 하나라도 있으면 진짜 바이너리로 보고 그대로 둔다.
+func (r *Repo) unwrapFalseBinaries(files []FileDiff, base, sha string, ctxLines int) {
+	for i := range files {
+		if !files[i].Binary {
+			continue
+		}
+		path := files[i].Path
+		if path == "" {
+			path = files[i].OldPath
+		}
+		if path == "" {
+			continue
+		}
+		out, err := r.Run("diff", "--no-color", "--no-ext-diff", "--text", "-M",
+			"-U"+strconv.Itoa(ctxLines), base, sha, "--", path)
+		if err != nil {
+			continue
+		}
+		got := ParseUnifiedDiff(out)
+		if len(got) != 1 || len(got[0].Hunks) == 0 || hasNUL(got[0]) {
+			continue
+		}
+		got[0].Binary = false
+		got[0].ForcedText = true
+		files[i] = got[0]
+	}
+}
+
+// hasNUL 은 diff 본문에 NUL 이 섞였는지 본다. 있으면 텍스트로 보여줄 수 없다.
+func hasNUL(f FileDiff) bool {
+	for _, h := range f.Hunks {
+		for _, l := range h.Lines {
+			if strings.ContainsRune(l.Text, 0) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // ParseUnifiedDiff 는 `git diff` 의 통합 diff 출력을 구조체로 바꾼다.

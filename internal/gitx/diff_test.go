@@ -1,6 +1,12 @@
 package gitx
 
-import "testing"
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 // 실제 `git diff -U4` 출력에서 가져온 픽스처. git 없이 파서만 검증한다.
 const diffFixture = `diff --git a/src/Foo.java b/src/Foo.java
@@ -236,5 +242,89 @@ func TestParseHunkHeader(t *testing.T) {
 			t.Errorf("parseHunkHeader(%q) = %d,%d,%v want %d,%d,%v",
 				tt.in, o, n, ok, tt.old, tt.new, tt.ok)
 		}
+	}
+}
+
+// .gitattributes 에 `*.conf binary` 로 선언된 텍스트 파일은 diff 를 펼쳐서 보여준다.
+//
+// 설정 파일을 통째로 binary 로 묶어둔 저장소가 흔한데,
+// 그대로 두면 사람이 읽어야 할 변경이 화면에서 사라진다.
+func TestDiffUnwrapsFalseBinaryConf(t *testing.T) {
+	dir := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=tester", "GIT_AUTHOR_EMAIL=t@example.com",
+			"GIT_COMMITTER_NAME=tester", "GIT_COMMITTER_EMAIL=t@example.com",
+			"GIT_CONFIG_GLOBAL="+filepath.Join(dir, "no-gitconfig"),
+			"GIT_CONFIG_SYSTEM="+filepath.Join(dir, "no-gitconfig"),
+		)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+	}
+	write := func(name, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	git("init", "-q", "-b", "main", ".")
+	write(".gitattributes", "*.conf binary\n")
+	write("app.conf", "a = 1\nb = 2\n")
+	write("blob.conf", "head\x00\x01\x02tail\n") // 진짜 바이너리
+	git("add", ".")
+	git("commit", "-q", "-m", "init")
+
+	write("app.conf", "a = 1\nb = 2\nc = 3\n")
+	write("blob.conf", "head\x00\x01\x02\x03tail\n")
+	git("commit", "-q", "-am", "change")
+
+	r, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := r.Diff("HEAD", "", 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var text, blob *FileDiff
+	for i := range files {
+		switch files[i].Path {
+		case "app.conf":
+			text = &files[i]
+		case "blob.conf":
+			blob = &files[i]
+		}
+	}
+	if text == nil || blob == nil {
+		t.Fatalf("두 파일이 다 나와야 한다: %+v", files)
+	}
+
+	if text.Binary || !text.ForcedText {
+		t.Errorf("app.conf: Binary=%v ForcedText=%v, want false/true", text.Binary, text.ForcedText)
+	}
+	if len(text.Hunks) == 0 {
+		t.Error("app.conf 헝크가 없다 — diff 가 펼쳐지지 않았다")
+	}
+	var added []string
+	for _, h := range text.Hunks {
+		for _, l := range h.Lines {
+			if l.Kind == LineAdd {
+				added = append(added, l.Text)
+			}
+		}
+	}
+	if len(added) != 1 || added[0] != "c = 3" {
+		t.Errorf("추가된 줄 = %q, want [\"c = 3\"]", added)
+	}
+
+	// NUL 이 든 파일은 그대로 바이너리로 남아야 한다.
+	if !blob.Binary || blob.ForcedText {
+		t.Errorf("blob.conf: Binary=%v ForcedText=%v, want true/false", blob.Binary, blob.ForcedText)
 	}
 }

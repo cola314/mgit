@@ -298,6 +298,12 @@ function fileCard(f) {
   if (f.oldPath && f.oldPath !== f.path) {
     head.appendChild(el("span", "chip branch", "renamed"));
   }
+  if (f.forcedText) {
+    // git 이 .gitattributes 때문에 바이너리로 취급했지만 내용은 텍스트라 펼쳤다.
+    const c = el("span", "chip", "text");
+    c.title = ".gitattributes 에서 binary 로 선언된 파일 — 내용이 텍스트라 diff 를 펼쳐 보여준다";
+    head.appendChild(c);
+  }
   const st = el("span", "st");
   st.appendChild(el("span", "a", `+${f.add}`));
   st.appendChild(document.createTextNode(" "));
