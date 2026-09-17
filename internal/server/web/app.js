@@ -1274,6 +1274,11 @@ async function pollState() {
       const first = state.head === undefined;
       state.head = st.head;
       if (!first) {
+        // 브랜치가 바뀌었을 수 있으니 상단 표시도 같이 갱신한다.
+        try {
+          state.repo = await api("/api/repo");
+          drawRepoHeader();
+        } catch (_) { /* 이름 갱신 실패는 치명적이지 않다 */ }
         await loadLog();
         if (!state.byId.has(state.sel)) await select(state.commits[0] && state.commits[0].sha);
         else render();
@@ -1298,15 +1303,23 @@ async function pollState() {
   } catch (_) { /* 서버가 내려가면 다음 주기에 다시 시도한다 */ }
 }
 
+// 저장소 이름과 현재 브랜치를 상단에 그린다.
+//
+// 브랜치 전환 때 다시 불러야 한다. 한 번만 그려두면 체크아웃 후에도 옛 브랜치명이
+// 남아, 그래프는 새 브랜치인데 이름은 옛것이라 화면이 서로 모순돼 보인다.
+function drawRepoHeader() {
+  const repoEl = $("#repo");
+  repoEl.textContent = "";
+  repoEl.appendChild(el("b", "", state.repo.name));
+  repoEl.appendChild(document.createTextNode(" · " + (state.repo.branch || "")));
+  document.title = "mgit — " + state.repo.name;
+}
+
 /* ── 초기화 ─────────────────────────────────────────────────────── */
 async function boot() {
   try {
     state.repo = await api("/api/repo");
-    const repoEl = $("#repo");
-    repoEl.textContent = "";
-    repoEl.appendChild(el("b", "", state.repo.name));
-    repoEl.appendChild(document.createTextNode(" · " + (state.repo.branch || "")));
-    document.title = "mgit — " + state.repo.name;
+    drawRepoHeader();
 
     state.scopeHead = localStorage.getItem(SCOPE_KEY) === "1";
     $("#scopehead").checked = state.scopeHead;
