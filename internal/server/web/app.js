@@ -873,6 +873,28 @@ async function loadLog() {
   state.noteCounts = log.noteCounts || {};
 }
 
+// doFetch 는 원격에서 ref 를 받아오고 목록을 다시 그린다.
+// fetch 는 HEAD 를 바꾸지 않으므로 pollState 의 자동 갱신이 안 걸린다. 여기서 직접 갱신한다.
+async function doFetch() {
+  const b = $("#fetch");
+  if (b.disabled) return;
+  b.disabled = true;
+  b.classList.add("spin");
+  try {
+    const r = await api("/api/fetch", {method: "POST"});
+    if (!r.changed) { toast("이미 최신입니다"); return; }
+    await loadLog();
+    if (!state.byId.has(state.sel)) await select(state.commits[0] && state.commits[0].sha);
+    else render();
+    toast("원격에서 가져왔습니다");
+  } catch (e) {
+    toast("가져오기 실패: " + e.message);
+  } finally {
+    b.disabled = false;
+    b.classList.remove("spin");
+  }
+}
+
 async function setScopeHead(on) {
   state.scopeHead = on;
   $("#scopehead").checked = on;
@@ -1390,6 +1412,7 @@ async function boot() {
     state.composer = "commit"; selectTab("tab-notes"); drawNotes();
     const ta = $("#composer-ta"); if (ta) ta.focus();
   };
+  $("#fetch").onclick = () => doFetch();
   $("#copy").onclick = () => {
     const t = $("#cmd").textContent;
     if (navigator.clipboard) navigator.clipboard.writeText(t).then(() => toast("복사했습니다"));

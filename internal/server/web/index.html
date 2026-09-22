@@ -96,6 +96,9 @@ body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);
   color:var(--muted);border-radius:6px;cursor:pointer;font-size:13px;line-height:1;padding:0}
 .iconbtn:hover{color:var(--ink);border-color:var(--muted)}
 .iconbtn:focus-visible{outline:2px solid var(--l0);outline-offset:1px}
+.iconbtn[disabled]{opacity:.5;cursor:default}
+.iconbtn.spin{animation:mgspin .9s linear infinite}
+@keyframes mgspin{to{transform:rotate(360deg)}}
 
 .body{flex:1;min-height:0;display:grid;
   grid-template-columns:minmax(0,1fr) var(--rail-w,396px);
@@ -442,6 +445,8 @@ try {
       <span>$</span><code id="cmd">mgit</code>
       <button class="copybtn" id="copy" type="button">복사</button>
     </div>
+    <button class="iconbtn" id="fetch" type="button" title="원격에서 가져오기 (git fetch)"
+            aria-label="원격에서 가져오기">⟳</button>
     <button class="iconbtn" id="theme" type="button" title="테마 전환 (자동 → 라이트 → 다크)"
             aria-label="테마 전환">◐</button>
   </div>

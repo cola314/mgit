@@ -32,6 +32,7 @@ type Server struct {
 	// explicit 은 사용자가 커밋을 콕 집어 지정했는지다(-c 또는 goto).
 	// 지정했으면 UI 가 그래프가 아니라 상세 뷰로 연다.
 	explicit bool
+	fetching bool // fetch 중복 실행 차단 — git 이 ref 락으로 실패하는 걸 먼저 막는다
 }
 
 // New 는 서버를 만든다. target 은 처음 열 커밋, explicit 은 -c 로 지정됐는지 여부다.
@@ -61,6 +62,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/file/{sha}", s.handleFile)
 	s.mux.HandleFunc("GET /api/state", s.handleState)
 	s.mux.HandleFunc("POST /api/goto", s.handleGoto)
+	s.mux.HandleFunc("POST /api/fetch", s.handleFetch)
 
 	s.mux.HandleFunc("GET /api/notes", s.handleNotesList)
 	s.mux.HandleFunc("POST /api/notes", s.handleNotesCreate)
@@ -286,6 +288,37 @@ func (s *Server) handleGoto(w http.ResponseWriter, r *http.Request) {
 
 // 메모는 요청마다 디스크에서 다시 읽는다. CLI 나 에이전트가 파일을 직접
 // 고쳐도 UI 가 바로 따라오게 하려는 의도적 선택이다.
+// fetchTimeout 은 원격이 응답하지 않을 때 핸들러가 물려 있는 시간의 상한이다.
+const fetchTimeout = 60 * time.Second
+
+func (s *Server) handleFetch(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	if s.fetching {
+		s.mu.Unlock()
+		writeErr(w, http.StatusConflict, fmt.Errorf("이미 가져오는 중입니다"))
+		return
+	}
+	s.fetching = true
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.fetching = false
+		s.mu.Unlock()
+	}()
+
+	// 락은 여기서 풀어 둔다. fetch 는 최대 1분이라 그동안 메모 쓰기를 막으면 안 된다.
+	before := s.repo.RemoteRefs()
+	out, err := s.repo.Fetch(fetchTimeout)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"output":  out,
+		"changed": s.repo.RemoteRefs() != before,
+	})
+}
+
 func (s *Server) handleNotesList(w http.ResponseWriter, r *http.Request) {
 	st, err := notes.Open(s.repo.Root)
 	if err != nil {
