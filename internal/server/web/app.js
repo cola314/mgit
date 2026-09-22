@@ -1334,6 +1334,8 @@ function drawRepoHeader() {
   repoEl.textContent = "";
   repoEl.appendChild(el("b", "", state.repo.name));
   repoEl.appendChild(document.createTextNode(" · " + (state.repo.branch || "")));
+  // 좁은 패널에서는 말줄임으로 잘리므로 전체 이름은 툴팁으로 남긴다
+  repoEl.title = repoEl.textContent;
   document.title = "mgit — " + state.repo.name;
 }
 
