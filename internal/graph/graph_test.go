@@ -247,3 +247,58 @@ func TestOctopusMerge(t *testing.T) {
 		t.Errorf("옥토퍼스 레인 수 = %d, want >= 3", l.Width)
 	}
 }
+
+// 머지되지 않은 브랜치 팁이 여럿이고 부모가 같을 때.
+// 팁마다 자기 레인을 가져야 한다. 레인을 공유하면 한 팁에서 공통 부모로
+// 내려가는 선이 다른 팁 노드를 관통해 그래프가 겹쳐 보인다.
+func TestUnmergedBranchTipsDoNotShareLane(t *testing.T) {
+	items := []Item{
+		{SHA: "t1", Parents: []string{"base"}},
+		{SHA: "t2", Parents: []string{"base"}},
+		{SHA: "t3", Parents: []string{"base"}},
+		{SHA: "t4", Parents: []string{"base"}},
+		{SHA: "base"},
+	}
+	l := Build(items)
+
+	seen := map[int]string{}
+	for _, sha := range []string{"t1", "t2", "t3", "t4"} {
+		lane := l.LaneOf(sha)
+		if prev, dup := seen[lane]; dup {
+			t.Errorf("%s 와 %s 가 레인 %d 를 공유한다", prev, sha, lane)
+		}
+		seen[lane] = sha
+	}
+}
+
+// 엣지는 관계없는 커밋 노드를 관통하면 안 된다.
+// (자식 row, 부모 row) 사이의 행에 같은 레인으로 놓인 노드가 있으면 겹침이다.
+func TestEdgeDoesNotPassThroughUnrelatedNode(t *testing.T) {
+	items := []Item{
+		{SHA: "t1", Parents: []string{"base"}},
+		{SHA: "t2", Parents: []string{"base"}},
+		{SHA: "t3", Parents: []string{"base"}},
+		{SHA: "base"},
+	}
+	l := Build(items)
+
+	at := map[int]map[int]string{} // row -> lane -> sha
+	for _, n := range l.Nodes {
+		if at[n.Row] == nil {
+			at[n.Row] = map[int]string{}
+		}
+		at[n.Row][n.Lane] = n.SHA
+	}
+	for _, e := range l.Edges {
+		if e.Dangling {
+			continue
+		}
+		// 레인을 바꾸는 선도 부모 행 직전까지는 출발 레인을 따라 내려간다.
+		for row := e.FromRow + 1; row < e.ToRow; row++ {
+			if sha, ok := at[row][e.FromLane]; ok {
+				t.Errorf("row %d~%d 레인 %d 엣지가 %s 노드를 관통한다",
+					e.FromRow, e.ToRow, e.FromLane, sha)
+			}
+		}
+	}
+}
