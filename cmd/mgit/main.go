@@ -36,6 +36,9 @@ const usage = `mgit — 로컬 git 뷰어 + 에이전트 메모
   mgit note rm <id>                            루트를 지우면 답글도 함께 지워진다
   mgit note export [--status open|all] [--context N]
 
+  mgit snapshot [<경로>] -c <리비전> [-c <리비전>...] -o <파일.html>
+                                               지정한 커밋을 서버 없이 열리는 읽기 전용 HTML 로 저장
+
 리비전은 git 문법을 그대로 쓴다 (HEAD, HEAD~3, 태그, 짧은 SHA, 브랜치명).
 메모는 <저장소>/.mgit/notes.jsonl 에 저장되고 .git/info/exclude 로 무시된다.
 `
@@ -58,6 +61,8 @@ func run(args []string) error {
 			return nil
 		case "note":
 			return runNote(args[1:])
+		case "snapshot":
+			return runSnapshot(args[1:])
 		}
 	}
 	return runOpen(args)
