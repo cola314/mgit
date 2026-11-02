@@ -140,12 +140,17 @@ func (s *Server) handleCommit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body, _ := s.repo.Run("log", "-1", "--format=%B", sha)
-	writeJSON(w, http.StatusOK, map[string]any{
+	resp := map[string]any{
 		"sha":   sha,
 		"short": s.repo.Short(sha),
 		"body":  strings.TrimSpace(body),
 		"stats": stats,
-	})
+	}
+	// 그래프 목록(최근 N개)에 없는 옛 커밋을 ?c= 로 열어도 제목·작성자를 그릴 수 있게.
+	if cs, err := s.repo.Log(gitx.LogOptions{Limit: 1, Revs: []string{sha}}); err == nil && len(cs) == 1 {
+		resp["commit"] = cs[0]
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
