@@ -6,6 +6,8 @@
 const R = 32, LW = 16, PAD = 16;   // 행 높이 / 레인 간격 / 좌측 여백
 const $ = s => document.querySelector(s);
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+// ?embed=1 — iframe 에 끼워 쓸 때 상단을 한 줄로 접는다 (index.html 이 data-embed 를 건다).
+const EMBED = document.documentElement.dataset.embed === "1";
 
 const state = {
   repo: null,
@@ -234,7 +236,82 @@ function drawDetail() {
     l2.appendChild(el("span", cls, v));
   }
   box.appendChild(l2);
+  if (EMBED) drawEmbedBar(box, c, parents);
   $("#diffmeta").textContent = (c.parents || []).length > 1 ? "merge commit · 첫 부모 기준" : "";
+}
+
+/* 임베드 모드의 한 줄 헤더. 누르면 ref·본문·parents 가 펼쳐지고,
+   파일이 여럿이면 파일 칩 줄이 붙는다. 그래프·메모 버튼은 오른쪽 아이콘으로. */
+let embedOpen = false;
+function drawEmbedBar(box, c, parents) {
+  box.classList.toggle("eopen", embedOpen);
+  const bar = el("div", "ebar");
+  const line = el("div", "eline");
+  line.tabIndex = 0;
+  line.setAttribute("role", "button");
+  line.setAttribute("aria-expanded", String(embedOpen));
+  line.title = "커밋 정보 펼치기/접기";
+  line.appendChild(el("span", "tw", "▶"));
+  line.appendChild(el("span", "sha", c.short));
+  line.appendChild(el("span", "sep", "·"));
+  const s = el("span", "es", c.subject);
+  s.title = c.subject;
+  line.appendChild(s);
+  line.appendChild(el("span", "sep", "·"));
+  line.appendChild(el("span", "au", c.author || ""));
+  line.appendChild(el("span", "sep d", "·"));
+  line.appendChild(el("span", "dt", fmtDate(c.date)));
+  const tog = () => { embedOpen = !embedOpen; drawDetail(); };
+  line.onclick = tog;
+  line.onkeydown = ev => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); tog(); } };
+  bar.appendChild(line);
+
+  const g = el("button", "iconbtn", "←");
+  g.type = "button"; g.title = "그래프로"; g.setAttribute("aria-label", g.title);
+  g.onclick = () => setView("graph");
+  bar.appendChild(g);
+  const m = el("button", "iconbtn", "✎");
+  m.type = "button"; m.id = "erail";
+  m.title = "메모 영역 펼치기/접기"; m.setAttribute("aria-label", m.title);
+  m.setAttribute("aria-pressed", String($("#app").dataset.rail !== "off"));
+  m.onclick = () => setRail($("#app").dataset.rail === "off");
+  bar.appendChild(m);
+  box.appendChild(bar);
+
+  const more = el("div", "emore");
+  if ((c.refs || []).length) {
+    const r = el("div", "refs");
+    for (const ref of c.refs) r.appendChild(refChip(ref));
+    more.appendChild(r);
+  }
+  more.appendChild(el("div", "kv", `${c.sha} · parents: ${parents}`
+    + ((c.parents || []).length > 1 ? " · merge commit (첫 부모 기준)" : "")));
+  const rest = state.detail && state.detail.body
+    ? state.detail.body.split("\n").slice(1).join("\n").trim() : "";
+  if (rest) more.appendChild(el("div", "bd", rest));
+  box.appendChild(more);
+
+  const files = (state.diff && state.diff.files) || [];
+  if (files.length > 1) {
+    const fl = el("div", "efiles");
+    for (const f of files) {
+      const b = el("button", "", baseOf(f.path));
+      b.type = "button";
+      b.title = f.path;
+      b.appendChild(el("span", "a", `+${f.add}`));
+      b.appendChild(el("span", "d", `−${f.del}`));
+      b.onclick = () => {
+        if (state.collapsed.has(f.path)) {
+          state.collapsed.delete(f.path);
+          const card = document.querySelector(`.filecard[data-path="${CSS.escape(f.path)}"]`);
+          if (card) card.classList.remove("collapsed");
+        }
+        scrollToFile(f.path);
+      };
+      fl.appendChild(b);
+    }
+    box.appendChild(fl);
+  }
 }
 
 /* 메모가 덮는 마지막 줄. endLine 이 없는 옛 메모는 시작 줄과 같다. */
@@ -280,6 +357,7 @@ function drawDiff() {
     body.appendChild(fileCard(f));
   }
   state.flashNote = null;
+  if (EMBED) drawDetail();   // 파일 칩은 diff 가 와야 그릴 수 있다
 }
 
 function fileCard(f) {
@@ -870,6 +948,7 @@ async function loadLog() {
   state.commits = log.commits || [];
   state.layout = log.graph || {nodes: [], edges: [], width: 0};
   state.byId = new Map(state.commits.map(c => [c.sha, c]));
+  keepSelected();
   state.noteCounts = log.noteCounts || {};
 }
 
@@ -893,6 +972,13 @@ async function doFetch() {
     b.disabled = false;
     b.classList.remove("spin");
   }
+}
+
+// 목록(최근 N개) 밖의 커밋을 ?c= 로 열었을 때도 상세 헤더를 그릴 수 있게
+// /api/commit 이 준 메타를 끼워 둔다. 그래프 행은 만들지 않는다.
+function keepSelected() {
+  const d = state.detail;
+  if (d && d.commit && d.sha === state.sel && !state.byId.has(d.sha)) state.byId.set(d.sha, d.commit);
 }
 
 async function setScopeHead(on) {
@@ -931,10 +1017,12 @@ async function select(sha) {
     if (state.sel !== sha) return;   // 그 사이 다른 커밋을 골랐다
     state.detail = detail;
     state.diff = diff;
+    keepSelected();
   } catch (e) {
     if (state.sel !== sha) return;
     state.diff = {error: "불러오지 못했습니다: " + e.message};
   }
+  drawDetail();
   drawDiff();
   drawGraphDetail();
   syncURL();
@@ -1098,6 +1186,8 @@ function setRail(open) {
   const btn = $("#togglerail");
   btn.textContent = open ? "메모 ▶" : "◀ 메모";
   btn.setAttribute("aria-expanded", String(open));
+  const eb = $("#erail");
+  if (eb) eb.setAttribute("aria-pressed", String(open));
   try { localStorage.setItem(RAIL_OPEN_KEY, open ? "1" : "0"); } catch (_) {}
 }
 
@@ -1158,6 +1248,7 @@ function syncURL() {
   // view 는 항상 적는다. 빼면 새로고침 때 "c 만 있으면 detail" 규칙에 걸려
   // 그래프 뷰가 상세 뷰로 튄다.
   q.set("view", state.view);
+  if (EMBED) q.set("embed", "1");   // 새로고침해도 임베드 모드를 유지한다
   history.replaceState(null, "", location.pathname + "?" + q);
 }
 
