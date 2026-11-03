@@ -30,14 +30,19 @@ mgit . -c HEAD~3                  # git 리비전 문법 그대로
 mgit . -print-url                 # 주소만 출력 (브라우저 안 염)
 
 mgit note add Foo.java:120 -m "여기 null 체크 빠진 듯"
+mgit note add Foo.java:120-135 -m "이 메서드 통째로"  # 여러 줄에 걸친 메모
 mgit note add -c HEAD -m "이 커밋 통째로 재검토"     # 커밋 단위 메모
+mgit note reply n1 -m "측정부터 하고 결정하시죠"      # 답글 (스레드로 이어짐)
 mgit note list [--status open|done|all] [--json]
 mgit note show n1
 mgit note done n1 -m "처리 내용"
 mgit note reopen n1
-mgit note rm n1
+mgit note rm n1                                     # 루트를 지우면 답글도 함께
 mgit note export [--status open|all]                # 프롬프트에 붙일 마크다운
 ```
+
+뷰어에서는 diff 줄 왼쪽 `✎` 를 누르면 그 줄에, **`✎` 를 Shift+클릭하면 거기까지 범위로**
+메모가 걸린다. 메모 박스는 범위의 **끝 줄 뒤**에 놓여서 코드 덩어리를 중간에 자르지 않는다.
 
 ## 설계에서 갈린 지점
 
@@ -63,6 +68,16 @@ CLI 없이 파일만 읽어도 된다. `.gitignore` 대신 `.git/info/exclude` �
 위아래를 `fingerprint` 로 떠 두고, 현재 HEAD 에서 그 코드가 어디로 갔는지
 찾아 `export` 에 함께 표시한다. 에이전트가 옛 줄 번호로 헤매지 않도록.
 `git blame` 추적보다 훨씬 싸면서 실제 케이스 대부분을 잡는다.
+
+**범위 메모는 시작 줄에만 지문을 건다.** 끝 줄은 `endLine - line` 델타로 보존하고,
+코드가 밀리면 새 시작 줄에 그 길이를 다시 얹는다. 양 끝에 지문을 걸면 둘이 서로 다른
+방향으로 밀렸을 때 범위가 뒤집히는 경우를 전부 처리해야 하는데, 얻는 정확도에 비해 비싸다.
+메모는 리뷰 사이클 동안만 사는 물건이다.
+
+**답글은 한 단계로 눌러 담는다.** 답글에 답글을 달아도 같은 루트에 모인다. 코드 리뷰
+대화에서 2단 이상 들여쓰기는 얻는 게 없고 화면만 좁아진다. 답글은 상태(open/done)를
+갖지 않는다 — 처리 단위는 스레드이지 개별 발언이 아니기 때문이다. 루트를 지우면 답글도
+함께 지워진다. 부모 없는 답글은 화면에서도 export 에서도 갈 곳이 없다.
 
 **머지 diff 는 첫 부모 기준이다.** git 기본값인 결합 diff(combined diff)는 줄 번호가
 모호해 메모 앵커로 쓸 수 없다.

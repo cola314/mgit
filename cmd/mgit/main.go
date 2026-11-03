@@ -26,12 +26,14 @@ const usage = `mgit — 로컬 git 뷰어 + 에이전트 메모
       -print-url                  주소만 출력하고 종료한다
 
   mgit note add <경로>:<줄> -m <내용> [-c <리비전>]
+  mgit note add <경로>:<시작>-<끝> -m <내용>     여러 줄에 걸친 메모
   mgit note add -c <리비전> -m <내용>          커밋 전체에 대한 메모
+  mgit note reply <id> -m <내용>               메모에 답글 (스레드로 이어짐)
   mgit note list [--status open|done|all] [--json]
   mgit note show <id>
   mgit note done <id> [-m <처리내용>]
   mgit note reopen <id>
-  mgit note rm <id>
+  mgit note rm <id>                            루트를 지우면 답글도 함께 지워진다
   mgit note export [--status open|all] [--context N]
 
 리비전은 git 문법을 그대로 쓴다 (HEAD, HEAD~3, 태그, 짧은 SHA, 브랜치명).
@@ -70,6 +72,8 @@ func runNote(args []string) error {
 	switch sub {
 	case "add":
 		return noteAdd(rest)
+	case "reply", "re":
+		return noteReply(rest)
 	case "list", "ls":
 		return noteList(rest)
 	case "show":
@@ -128,7 +132,7 @@ func noteAdd(args []string) error {
 		n.Kind = notes.KindCommit
 		n.Anchor = notes.Anchor{Commit: sha}
 	} else {
-		path, line, err := notes.ParseTarget(pos[0])
+		path, line, end, err := notes.ParseTarget(pos[0])
 		if err != nil {
 			return err
 		}
@@ -143,8 +147,14 @@ func noteAdd(args []string) error {
 		if line > len(lines) {
 			return fmt.Errorf("%s 는 %d줄뿐입니다 (%d번 줄 지정)", rel, len(lines), line)
 		}
+		if end > len(lines) {
+			return fmt.Errorf("%s 는 %d줄뿐입니다 (%d번 줄까지 지정)", rel, len(lines), end)
+		}
 		n.Kind = notes.KindLine
 		n.Anchor = notes.Anchor{Commit: sha, Path: rel, Line: line}
+		if end > line {
+			n.Anchor.EndLine = end
+		}
 		n.Fingerprint = notes.MakeFingerprint(lines, line)
 	}
 
@@ -153,6 +163,53 @@ func noteAdd(args []string) error {
 		return err
 	}
 	fmt.Printf("%s 추가됨  %s @ %s\n", n.ID, n.Target(), repo.Short(sha))
+	return nil
+}
+
+func noteReply(args []string) error {
+	fs := flag.NewFlagSet("note reply", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	body := fs.String("m", "", "답글 내용")
+	pos, err := parseMixed(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) == 0 {
+		return fmt.Errorf("답글을 달 메모 ID 를 지정하세요")
+	}
+	if strings.TrimSpace(*body) == "" {
+		return fmt.Errorf("답글 내용을 -m 으로 지정하세요")
+	}
+
+	repo, st, err := openBoth()
+	if err != nil {
+		return err
+	}
+	target := st.Find(pos[0])
+	if target == nil {
+		return fmt.Errorf("%s 메모를 찾을 수 없습니다", pos[0])
+	}
+	// 답글에 답글을 달면 스레드가 그 루트로 모이게 한다. 2단 이상 들여쓰기는
+	// 코드 리뷰 대화에서 얻는 게 없고 화면만 좁아진다.
+	root := st.ThreadRoot(target)
+
+	n := &notes.Note{
+		ID:     st.NextID(),
+		Parent: root.ID,
+		// 앵커를 물려받아야 줄 단위 표시와 코드 문맥 추출이 그대로 동작한다.
+		Kind:        root.Kind,
+		Anchor:      root.Anchor,
+		Fingerprint: root.Fingerprint,
+		Body:        strings.TrimSpace(*body),
+		Status:      notes.StatusOpen,
+		Created:     time.Now(),
+	}
+	st.Add(n)
+	if err := st.Save(); err != nil {
+		return err
+	}
+	fmt.Printf("%s 추가됨  → %s  %s @ %s\n",
+		n.ID, root.ID, n.Target(), repo.Short(n.Anchor.Commit))
 	return nil
 }
 
@@ -169,7 +226,7 @@ func noteList(args []string) error {
 	if err != nil {
 		return err
 	}
-	list := st.Select(*status)
+	list := st.SelectThreads(*status)
 
 	if *asJSON {
 		enc := json.NewEncoder(os.Stdout)
@@ -188,6 +245,11 @@ func noteList(args []string) error {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "ID\t상태\t커밋\t위치\t내용")
 	for _, n := range list {
+		// 답글은 부모 아래로 들여쓰고, 부모와 겹치는 칸은 비워 스레드가 눈에 들어오게 한다.
+		if n.IsReply() {
+			fmt.Fprintf(w, "  ↳ %s\t\t\t\t%s\n", n.ID, firstLine(n.Body, 50))
+			continue
+		}
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
 			n.ID, n.Status, repo.Short(n.Anchor.Commit), targetShort(n), firstLine(n.Body, 52))
 	}
@@ -206,7 +268,9 @@ func noteShow(args []string) error {
 	if n == nil {
 		return fmt.Errorf("%s 메모를 찾을 수 없습니다", args[0])
 	}
-	return notes.Export(os.Stdout, []*notes.Note{n}, repo, notes.DefaultContext)
+	// 답글 ID 를 줬어도 대화 전체를 보여준다. 답글만 떼어놓으면 맥락이 없다.
+	root := st.ThreadRoot(n)
+	return notes.Export(os.Stdout, append([]*notes.Note{root}, st.Children(root.ID)...), repo, notes.DefaultContext)
 }
 
 func noteDone(args []string, done bool) error {
@@ -228,6 +292,10 @@ func noteDone(args []string, done bool) error {
 	n := st.Find(pos[0])
 	if n == nil {
 		return fmt.Errorf("%s 메모를 찾을 수 없습니다", pos[0])
+	}
+	if n.IsReply() {
+		// 처리 단위는 스레드다. 답글마다 상태가 따로 놀면 뭐가 남은 일인지 알 수 없다.
+		return fmt.Errorf("%s 는 답글이라 상태를 가지지 않습니다. 부모 메모 %s 를 처리하세요", n.ID, n.Parent)
 	}
 	now := time.Now()
 	n.Updated = &now
@@ -277,7 +345,7 @@ func noteExport(args []string) error {
 	if err != nil {
 		return err
 	}
-	return notes.Export(os.Stdout, st.Select(*status), repo, *ctx)
+	return notes.Export(os.Stdout, st.SelectThreads(*status), repo, *ctx)
 }
 
 // openBoth 는 현재 디렉토리의 저장소와 메모 스토어를 함께 연다.
@@ -317,6 +385,9 @@ func parseMixed(fs *flag.FlagSet, args []string) ([]string, error) {
 func targetShort(n *notes.Note) string {
 	if n.Kind == notes.KindCommit {
 		return "커밋 전체"
+	}
+	if n.IsRange() {
+		return fmt.Sprintf("%s:%d-%d", n.Base(), n.Anchor.Line, n.Anchor.EndLine)
 	}
 	return fmt.Sprintf("%s:%d", n.Base(), n.Anchor.Line)
 }

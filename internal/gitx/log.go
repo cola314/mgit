@@ -39,7 +39,7 @@ func (c Commit) IsMerge() bool { return len(c.Parents) > 1 }
 // LogOptions 는 Log 호출 조건이다.
 type LogOptions struct {
 	Limit int      // 0 이면 기본값(200)
-	Revs  []string // 비어 있으면 --all
+	Revs  []string // 비어 있으면 --all (refs/notes 제외)
 }
 
 // Log 는 위상 정렬된 커밋 목록을 읽는다.
@@ -53,7 +53,11 @@ func (r *Repo) Log(opt LogOptions) ([]Commit, error) {
 	}
 	args := []string{"log", "--topo-order", "--format=" + logFormat, "-n", strconv.Itoa(limit)}
 	if len(opt.Revs) == 0 {
-		args = append(args, "--all")
+		// refs/notes/* 는 뺀다. textconv 캐시(diff.<드라이버>.cachetextconv)가
+		// 만드는 refs/notes/textconv/<드라이버> 가 --all 에 딸려 들어와,
+		// 메시지가 변환 명령줄이고 부모가 없는 커밋으로 그래프에 찍힌다.
+		// --exclude 는 그 뒤의 --all 에만 걸리므로 순서를 바꾸면 안 된다.
+		args = append(args, "--exclude=refs/notes/*", "--all")
 	} else {
 		args = append(args, opt.Revs...)
 	}
@@ -139,7 +143,8 @@ func (r *Repo) NumStat(sha string) ([]FileStat, error) {
 	if err != nil {
 		return nil, err
 	}
-	args := []string{"diff", "--numstat", "--no-color", "-M"}
+	// --textconv: xls 등 textconv 필터가 걸린 파일도 증감 줄 수를 세도록 (없으면 "-" 로만 나옴)
+	args := []string{"diff", "--numstat", "--no-color", "--textconv", "-M"}
 	if base == "" {
 		// 루트 커밋: 빈 트리와 비교한다.
 		args = append(args, emptyTree, sha)

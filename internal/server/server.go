@@ -32,6 +32,7 @@ type Server struct {
 	// explicit 은 사용자가 커밋을 콕 집어 지정했는지다(-c 또는 goto).
 	// 지정했으면 UI 가 그래프가 아니라 상세 뷰로 연다.
 	explicit bool
+	fetching bool // fetch 중복 실행 차단 — git 이 ref 락으로 실패하는 걸 먼저 막는다
 }
 
 // New 는 서버를 만든다. target 은 처음 열 커밋, explicit 은 -c 로 지정됐는지 여부다.
@@ -61,6 +62,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/file/{sha}", s.handleFile)
 	s.mux.HandleFunc("GET /api/state", s.handleState)
 	s.mux.HandleFunc("POST /api/goto", s.handleGoto)
+	s.mux.HandleFunc("POST /api/fetch", s.handleFetch)
 
 	s.mux.HandleFunc("GET /api/notes", s.handleNotesList)
 	s.mux.HandleFunc("POST /api/notes", s.handleNotesCreate)
@@ -291,6 +293,37 @@ func (s *Server) handleGoto(w http.ResponseWriter, r *http.Request) {
 
 // 메모는 요청마다 디스크에서 다시 읽는다. CLI 나 에이전트가 파일을 직접
 // 고쳐도 UI 가 바로 따라오게 하려는 의도적 선택이다.
+// fetchTimeout 은 원격이 응답하지 않을 때 핸들러가 물려 있는 시간의 상한이다.
+const fetchTimeout = 60 * time.Second
+
+func (s *Server) handleFetch(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	if s.fetching {
+		s.mu.Unlock()
+		writeErr(w, http.StatusConflict, fmt.Errorf("이미 가져오는 중입니다"))
+		return
+	}
+	s.fetching = true
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.fetching = false
+		s.mu.Unlock()
+	}()
+
+	// 락은 여기서 풀어 둔다. fetch 는 최대 1분이라 그동안 메모 쓰기를 막으면 안 된다.
+	before := s.repo.RemoteRefs()
+	out, err := s.repo.Fetch(fetchTimeout)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"output":  out,
+		"changed": s.repo.RemoteRefs() != before,
+	})
+}
+
 func (s *Server) handleNotesList(w http.ResponseWriter, r *http.Request) {
 	st, err := notes.Open(s.repo.Root)
 	if err != nil {
@@ -308,9 +341,11 @@ func (s *Server) handleNotesCreate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Kind   string `json:"kind"`
 		Commit string `json:"commit"`
-		Path   string `json:"path"`
-		Line   int    `json:"line"`
-		Body   string `json:"body"`
+		Path    string `json:"path"`
+		Line    int    `json:"line"`
+		EndLine int    `json:"endLine"`
+		Body    string `json:"body"`
+		Parent  string `json:"parent"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
@@ -320,11 +355,6 @@ func (s *Server) handleNotesCreate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("메모 내용이 비어 있습니다"))
 		return
 	}
-	sha, err := s.repo.ResolveCommit(req.Commit)
-	if err != nil {
-		writeErr(w, http.StatusNotFound, err)
-		return
-	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -332,6 +362,39 @@ func (s *Server) handleNotesCreate(w http.ResponseWriter, r *http.Request) {
 	st, err := notes.Open(s.repo.Root)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	// 답글은 부모의 앵커를 그대로 물려받는다. 위치를 다시 풀 필요가 없다.
+	if p := strings.TrimSpace(req.Parent); p != "" {
+		target := st.Find(p)
+		if target == nil {
+			writeErr(w, http.StatusNotFound, fmt.Errorf("%s 메모를 찾을 수 없습니다", p))
+			return
+		}
+		root := st.ThreadRoot(target)
+		reply := &notes.Note{
+			ID:          st.NextID(),
+			Parent:      root.ID,
+			Kind:        root.Kind,
+			Anchor:      root.Anchor,
+			Fingerprint: root.Fingerprint,
+			Body:        strings.TrimSpace(req.Body),
+			Status:      notes.StatusOpen,
+			Created:     time.Now(),
+		}
+		st.Add(reply)
+		if err := st.Save(); err != nil {
+			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, reply)
+		return
+	}
+
+	sha, err := s.repo.ResolveCommit(req.Commit)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err)
 		return
 	}
 	n := &notes.Note{
@@ -359,8 +422,16 @@ func (s *Server) handleNotesCreate(w http.ResponseWriter, r *http.Request) {
 				fmt.Errorf("%s 는 %d줄뿐입니다 (%d번 줄 지정)", rel, len(lines), req.Line))
 			return
 		}
+		if req.EndLine > len(lines) {
+			writeErr(w, http.StatusBadRequest,
+				fmt.Errorf("%s 는 %d줄뿐입니다 (%d번 줄까지 지정)", rel, len(lines), req.EndLine))
+			return
+		}
 		n.Kind = notes.KindLine
 		n.Anchor = notes.Anchor{Commit: sha, Path: rel, Line: req.Line}
+		if req.EndLine > req.Line {
+			n.Anchor.EndLine = req.EndLine
+		}
 		n.Fingerprint = notes.MakeFingerprint(lines, req.Line)
 	}
 
@@ -397,6 +468,11 @@ func (s *Server) handleNotesUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if req.Status != nil && n.IsReply() {
+		writeErr(w, http.StatusBadRequest,
+			fmt.Errorf("%s 는 답글이라 상태를 가지지 않습니다. 부모 메모 %s 를 처리하세요", n.ID, n.Parent))
+		return
+	}
 	if req.Status != nil {
 		switch *req.Status {
 		case notes.StatusOpen:

@@ -33,6 +33,12 @@ type Anchor struct {
 	Commit string `json:"commit"`
 	Path   string `json:"path,omitempty"`
 	Line   int    `json:"line,omitempty"`
+	// EndLine 은 여러 줄에 걸친 메모의 끝 줄이다. 0 이거나 Line 이하면 단일 줄 메모다.
+	//
+	// 필드가 없는 옛 메모는 자연히 단일 줄로 읽힌다. 지문은 시작 줄에만 걸고 끝은
+	// 델타로 보존한다 — 양 끝에 지문을 걸면 둘이 서로 다른 방향으로 밀렸을 때
+	// 범위가 뒤집히는 경우를 전부 처리해야 하는데, 얻는 정확도에 비해 비싸다.
+	EndLine int `json:"endLine,omitempty"`
 }
 
 // Note 는 메모 하나다.
@@ -42,20 +48,58 @@ type Note struct {
 	Anchor Anchor `json:"anchor"`
 	// Fingerprint 는 앵커 줄과 위아래 한 줄씩의 원문이다. 코드가 이동했을 때
 	// 현재 파일에서 같은 위치를 다시 찾는 데 쓴다.
-	Fingerprint []string   `json:"fingerprint,omitempty"`
-	Body        string     `json:"body"`
-	Status      string     `json:"status"`
-	Resolution  string     `json:"resolution,omitempty"`
-	Created     time.Time  `json:"created"`
-	Updated     *time.Time `json:"updated,omitempty"`
+	Fingerprint []string `json:"fingerprint,omitempty"`
+	// Parent 는 이 메모가 답글일 때 부모 메모의 ID 다. 비어 있으면 루트 메모.
+	//
+	// 필드가 없는 옛 메모는 자연히 루트로 읽히므로 기존 notes.jsonl 은 그대로 쓸 수 있다.
+	// 답글은 부모의 Kind·Anchor·Fingerprint 를 복사해 갖는다. 그래야 줄 단위 조회나
+	// 코드 문맥 추출 같은 기존 경로가 답글에도 손대지 않고 그대로 동작한다.
+	Parent     string     `json:"parent,omitempty"`
+	Body       string     `json:"body"`
+	Status     string     `json:"status"`
+	Resolution string     `json:"resolution,omitempty"`
+	Created    time.Time  `json:"created"`
+	Updated    *time.Time `json:"updated,omitempty"`
 }
 
-// Target 은 사람이 읽는 위치 표기다. (예: DeleteAlertLogParameter.java:18)
+// IsReply 는 이 메모가 다른 메모에 달린 답글인지 알려준다.
+func (n *Note) IsReply() bool { return n.Parent != "" }
+
+// Target 은 사람이 읽는 위치 표기다. (예: Foo.java:18, Foo.java:18-32)
 func (n *Note) Target() string {
 	if n.Kind == KindCommit {
 		return "커밋 전체"
 	}
+	if n.IsRange() {
+		return fmt.Sprintf("%s:%d-%d", n.Anchor.Path, n.Anchor.Line, n.Anchor.EndLine)
+	}
 	return fmt.Sprintf("%s:%d", n.Anchor.Path, n.Anchor.Line)
+}
+
+// IsRange 는 메모가 여러 줄에 걸쳐 있는지 알려준다.
+func (n *Note) IsRange() bool { return n.Anchor.EndLine > n.Anchor.Line }
+
+// LastLine 은 메모가 덮는 마지막 줄이다. 단일 줄이면 시작 줄과 같다.
+func (n *Note) LastLine() int {
+	if n.IsRange() {
+		return n.Anchor.EndLine
+	}
+	return n.Anchor.Line
+}
+
+// LocateRange 는 현재 파일에서 이 메모가 덮는 범위를 찾는다.
+//
+// 시작 줄은 Locate 로 추적하고, 끝은 원래 범위 길이를 그대로 얹어 구한다.
+func (n *Note) LocateRange(cur []string) (start, end int, d Drift) {
+	start, d = n.Locate(cur)
+	end = start + (n.LastLine() - n.Anchor.Line)
+	if len(cur) > 0 && end > len(cur) {
+		end = len(cur)
+	}
+	if end < start {
+		end = start
+	}
+	return start, end, d
 }
 
 // Base 는 경로의 파일명만 돌려준다.
@@ -169,23 +213,40 @@ func findWindow(hay []string, needle []string) int {
 // norm 은 들여쓰기 변경에 흔들리지 않도록 좌우 공백을 없앤다.
 func norm(s string) string { return strings.TrimSpace(s) }
 
-// ParseTarget 은 "경로:줄번호" 형태의 인자를 쪼갠다.
+// ParseTarget 은 "경로:줄번호" 또는 "경로:시작-끝" 형태의 인자를 쪼갠다.
 //
 // Windows 드라이브 문자(C:\...)를 줄 번호로 오해하지 않도록 마지막 콜론만 본다.
-func ParseTarget(arg string) (path string, line int, err error) {
+// 단일 줄이면 end 는 start 와 같게 돌려준다.
+func ParseTarget(arg string) (path string, line, end int, err error) {
 	i := strings.LastIndex(arg, ":")
 	if i < 0 {
-		return "", 0, fmt.Errorf("위치는 경로:줄번호 형식이어야 합니다 (예: src/Foo.java:120)")
+		return "", 0, 0, fmt.Errorf("위치는 경로:줄번호 형식이어야 합니다 (예: src/Foo.java:120 또는 src/Foo.java:120-135)")
 	}
 	path, numStr := arg[:i], arg[i+1:]
-	line, err = strconv.Atoi(numStr)
-	if err != nil || line < 1 {
-		return "", 0, fmt.Errorf("줄 번호가 올바르지 않습니다: %q", numStr)
-	}
 	if strings.TrimSpace(path) == "" {
-		return "", 0, fmt.Errorf("경로가 비어 있습니다")
+		return "", 0, 0, fmt.Errorf("경로가 비어 있습니다")
 	}
-	return path, line, nil
+
+	startStr, endStr := numStr, ""
+	if j := strings.Index(numStr, "-"); j >= 0 {
+		startStr, endStr = numStr[:j], numStr[j+1:]
+	}
+
+	line, err = strconv.Atoi(startStr)
+	if err != nil || line < 1 {
+		return "", 0, 0, fmt.Errorf("줄 번호가 올바르지 않습니다: %q", startStr)
+	}
+	if endStr == "" {
+		return path, line, line, nil
+	}
+	end, err = strconv.Atoi(endStr)
+	if err != nil || end < 1 {
+		return "", 0, 0, fmt.Errorf("끝 줄 번호가 올바르지 않습니다: %q", endStr)
+	}
+	if end < line {
+		return "", 0, 0, fmt.Errorf("끝 줄(%d)이 시작 줄(%d)보다 앞입니다", end, line)
+	}
+	return path, line, end, nil
 }
 
 // MakeFingerprint 는 앵커 줄을 중심으로 위아래 한 줄씩을 지문으로 뜬다.

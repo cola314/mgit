@@ -23,22 +23,31 @@ func TestParseTarget(t *testing.T) {
 		in      string
 		path    string
 		line    int
+		end     int
 		wantErr bool
 	}{
-		{in: "src/Foo.java:120", path: "src/Foo.java", line: 120},
-		{in: "Foo.java:1", path: "Foo.java", line: 1},
+		{in: "src/Foo.java:120", path: "src/Foo.java", line: 120, end: 120},
+		{in: "Foo.java:1", path: "Foo.java", line: 1, end: 1},
 		// Windows 드라이브 문자를 줄 번호로 오해하면 안 된다.
-		{in: `C:\work\repo\Foo.java:42`, path: `C:\work\repo\Foo.java`, line: 42},
+		{in: `C:\work\repo\Foo.java:42`, path: `C:\work\repo\Foo.java`, line: 42, end: 42},
+		// 범위 지정.
+		{in: "src/Foo.java:120-135", path: "src/Foo.java", line: 120, end: 135},
+		{in: "src/Foo.java:7-7", path: "src/Foo.java", line: 7, end: 7},
+		{in: `C:\work\repo\Foo.java:10-20`, path: `C:\work\repo\Foo.java`, line: 10, end: 20},
 		{in: "src/Foo.java", wantErr: true},
 		{in: "src/Foo.java:0", wantErr: true},
 		{in: "src/Foo.java:abc", wantErr: true},
 		{in: ":12", wantErr: true},
+		// 끝이 시작보다 앞이면 오류.
+		{in: "src/Foo.java:30-10", wantErr: true},
+		{in: "src/Foo.java:10-abc", wantErr: true},
+		{in: "src/Foo.java:10-0", wantErr: true},
 	}
 	for _, tt := range tests {
-		path, line, err := ParseTarget(tt.in)
+		path, line, end, err := ParseTarget(tt.in)
 		if tt.wantErr {
 			if err == nil {
-				t.Errorf("ParseTarget(%q): 오류를 기대했지만 %s:%d 를 얻음", tt.in, path, line)
+				t.Errorf("ParseTarget(%q): 오류를 기대했지만 %s:%d-%d 를 얻음", tt.in, path, line, end)
 			}
 			continue
 		}
@@ -46,8 +55,8 @@ func TestParseTarget(t *testing.T) {
 			t.Errorf("ParseTarget(%q): 예상치 못한 오류 %v", tt.in, err)
 			continue
 		}
-		if path != tt.path || line != tt.line {
-			t.Errorf("ParseTarget(%q) = %s:%d, want %s:%d", tt.in, path, line, tt.path, tt.line)
+		if path != tt.path || line != tt.line || end != tt.end {
+			t.Errorf("ParseTarget(%q) = %s:%d-%d, want %s:%d-%d", tt.in, path, line, end, tt.path, tt.line, tt.end)
 		}
 	}
 }
