@@ -21,7 +21,7 @@ const HL = (() => {
     sql: "select from where insert update delete into values set join left right inner outer full on group by order having limit offset union all as and or not null is in exists between like distinct create table alter drop index view primary key foreign references default case when then else end asc desc count sum avg min max",
     kotlin: "as break by class continue do else false for fun if in interface is null object package return super this throw true try typealias val var when while private public protected internal override suspend data sealed companion init constructor",
     csharp: "abstract as base bool break byte case catch char class const continue decimal default delegate do double else enum event explicit extern false finally fixed float for foreach get goto if implicit in int interface internal is lock long namespace new null object operator out override params private protected public readonly ref return sbyte sealed set short sizeof static string struct switch this throw true try typeof uint ulong unchecked unsafe ushort using var virtual void volatile while async await",
-    yaml: "true false null yes no on off",
+    yaml: "true false null yes no on off True False None Null",
     json: "true false null",
   };
 
@@ -47,10 +47,11 @@ const HL = (() => {
     js: "javascript", jsx: "javascript", mjs: "javascript", cjs: "javascript",
     ts: "typescript", tsx: "typescript",
     py: "python", sql: "sql",
-    yml: "yaml", yaml: "yaml", json: "json",
+    yml: "salt", yaml: "salt", json: "json",
     xml: "xml", html: "xml", htm: "xml", xsd: "xml", pom: "xml", svg: "xml",
     properties: "properties", conf: "properties", ini: "properties",
     sh: "shell", bash: "shell", zsh: "shell",
+    sls: "salt", jinja: "salt", j2: "salt",
   };
 
   function set(s) {
@@ -79,6 +80,7 @@ const HL = (() => {
   /* highlight 는 한 줄을 HTML 로 바꾸고 다음 줄에 넘길 상태를 돌려준다.
      state 는 { block: bool } — 블록 주석이 이어지는 중인지. */
   function highlight(text, lang, state) {
+    if (lang === "salt") return highlightSalt(text, state);
     const L = LANGS[lang];
     if (!L || text === "") return {html: esc(text), state};
 
@@ -180,6 +182,88 @@ const HL = (() => {
     }
 
     return {html: out, state: {block: inBlock}};
+  }
+
+  /* Salt(.sls) = YAML 위에 Jinja 가 얹힌 형태. {{ }}/{% %}/{# #} 구간을 먼저 잘라
+     Jinja 로 칠하고, 나머지 조각은 YAML 로 칠한다. Jinja 태그는 여러 줄에 걸칠 수
+     있어서 state.jinja 에 닫는 기호를 들고 다음 줄로 넘긴다. */
+  const JINJA_KW = set("if elif else endif for endfor in set endset import from as macro endmacro call endcall include with without context not and or is filter endfilter block endblock extends raw endraw do load_yaml load_json import_yaml import_json true false none True False None loop");
+  const SALT_REQ = set("require watch onchanges onfail prereq listen use require_in watch_in onchanges_in onfail_in prereq_in listen_in use_in onlyif unless creates");
+  const JINJA_OPEN = {"{{": "}}", "{%": "%}", "{#": "#}"};
+
+  function jinjaBody(src) {
+    let out = "", i = 0, n = src.length, afterPipe = false;
+    while (i < n) {
+      const c = src[i];
+      if (c === "'" || c === "\"") {
+        let j = i + 1;
+        while (j < n && src[j] !== c) { if (src[j] === "\\") j++; j++; }
+        j = Math.min(j + 1, n);
+        out += tag("str", src.slice(i, j)); i = j; continue;
+      }
+      if (/[0-9]/.test(c) && (i === 0 || !isId(src[i - 1]))) {
+        let j = i;
+        while (j < n && /[0-9.]/.test(src[j])) j++;
+        out += tag("num", src.slice(i, j)); i = j; continue;
+      }
+      if (isIdStart(c)) {
+        let j = i;
+        while (j < n && isId(src[j])) j++;
+        const w = src.slice(i, j);
+        let k = j;
+        while (k < n && src[k] === " ") k++;
+        if (JINJA_KW.has(w)) out += tag("kw", w);
+        else if (afterPipe || src[k] === "(") out += tag("fn", w);
+        else out += esc(w);
+        afterPipe = false; i = j; continue;
+      }
+      if (c === "|") afterPipe = true;
+      else if (c !== " ") afterPipe = false;
+      out += esc(c); i++;
+    }
+    return out;
+  }
+
+  // Jinja 가 아닌 조각. 줄 맨 앞 조각이면 YAML 키를 따로 칠한다:
+  // 점이 든 키(file.managed:)는 state 함수, requisite 는 키워드, 나머지는 키.
+  function yamlChunk(src, atLineStart) {
+    if (atLineStart) {
+      const m = /^(\s*(?:-\s+)?)([A-Za-z0-9_.\-\/]+)(:)(?=\s|$)/.exec(src);
+      if (m) {
+        const k = m[2];
+        const cls = SALT_REQ.has(k) ? "kw" : k.includes(".") ? "fn" : "type";
+        return esc(m[1]) + tag(cls, k) + esc(m[3]) + highlight(src.slice(m[0].length), "yaml", null).html;
+      }
+    }
+    return highlight(src, "yaml", null).html;
+  }
+
+  function highlightSalt(text, state) {
+    let out = "", i = 0, n = text.length;
+    let close = state && state.jinja;
+    while (i < n) {
+      if (close) {
+        const end = text.indexOf(close, i);
+        let stop = end < 0 ? n : end;
+        if (end > i && (text[end - 1] === "-" || text[end - 1] === "+")) stop--;
+        const body = text.slice(i, stop);
+        out += close === "#}" ? tag("com", body) : jinjaBody(body);
+        if (end < 0) { i = n; break; }
+        out += tag(close === "#}" ? "com" : "anno", text.slice(stop, end + 2));
+        i = end + 2; close = null; continue;
+      }
+      const m = /\{[{%#]/.exec(text.slice(i));
+      const at = m ? i + m.index : n;
+      if (at > i) out += yamlChunk(text.slice(i, at), i === 0);
+      if (!m) break;
+      const open = m[0];
+      close = JINJA_OPEN[open];
+      let j = at + 2;
+      if (text[j] === "-" || text[j] === "+") j++;
+      out += tag(open === "{#" ? "com" : "anno", text.slice(at, j));
+      i = j;
+    }
+    return {html: out, state: {block: false, jinja: close}};
   }
 
   return {highlight, langOf};
