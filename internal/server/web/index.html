@@ -17,7 +17,6 @@
   --on-accent:#FFFFFF;
   --syn-kw:#8250A8; --syn-str:#137A4E; --syn-com:#7C8894; --syn-num:#A85A18;
   --syn-type:#1F6E86; --syn-anno:#8A5D0C; --syn-fn:#2C5FA8;
-  --sb:#C7D0DB; --sb-hover:#A8B4C3; --sb-active:#8C9AAB;
   --shadow:0 1px 2px rgba(20,30,45,.05),0 4px 12px rgba(20,30,45,.05);
   --sans:"Pretendard Variable",Pretendard,-apple-system,"Segoe UI Variable Text","Segoe UI","Malgun Gothic",sans-serif;
   --mono:"JetBrains Mono","Cascadia Code","Cascadia Mono",ui-monospace,Consolas,"D2Coding",monospace;
@@ -36,7 +35,6 @@
     --on-accent:#13161B;
     --syn-kw:#C39BE8; --syn-str:#7FC49A; --syn-com:#6E7A87; --syn-num:#E0A46A;
     --syn-type:#6FC3D6; --syn-anno:#E3B15A; --syn-fn:#82AEE8;
-    --sb:#3A434E; --sb-hover:#4C5763; --sb-active:#606C7A;
     --shadow:0 1px 2px rgba(0,0,0,.35),0 4px 14px rgba(0,0,0,.25);
   }
 }
@@ -51,7 +49,6 @@
   --on-accent:#13161B;
   --syn-kw:#C39BE8; --syn-str:#7FC49A; --syn-com:#6E7A87; --syn-num:#E0A46A;
   --syn-type:#6FC3D6; --syn-anno:#E3B15A; --syn-fn:#82AEE8;
-  --sb:#3A434E; --sb-hover:#4C5763; --sb-active:#606C7A;
   --shadow:0 1px 2px rgba(0,0,0,.35),0 4px 14px rgba(0,0,0,.25);
 }
 *{box-sizing:border-box}
@@ -61,13 +58,14 @@ body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);
 
 /* 스크롤바 — 기본 위젯은 폭이 넓고 트랙이 회색 판으로 떠서 패널 경계를 흐린다.
    투명 트랙 + 얇은 알약 손잡이로 바꾸고, 배경 위에 떠 있게 보이도록 여백을 준다. */
-*{scrollbar-width:thin;scrollbar-color:var(--sb) transparent}
-::-webkit-scrollbar{width:12px;height:12px}
+*{scrollbar-width:thin;scrollbar-color:color-mix(in srgb,var(--muted) 45%,transparent) transparent}
+::-webkit-scrollbar{width:8px;height:8px}
 ::-webkit-scrollbar-track{background:transparent}
-::-webkit-scrollbar-thumb{background:var(--sb);border-radius:99px;
-  border:3px solid transparent;background-clip:content-box;min-height:36px}
-::-webkit-scrollbar-thumb:hover{background:var(--sb-hover);background-clip:content-box}
-::-webkit-scrollbar-thumb:active{background:var(--sb-active);background-clip:content-box}
+::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--muted) 35%,transparent);border-radius:99px;
+  border:2px solid transparent;background-clip:padding-box;min-height:36px}
+::-webkit-scrollbar-thumb:hover{background:color-mix(in srgb,var(--muted) 65%,transparent);background-clip:padding-box}
+::-webkit-scrollbar-thumb:active{background:color-mix(in srgb,var(--muted) 80%,transparent);background-clip:padding-box}
+::-webkit-scrollbar-button{display:none;width:0;height:0}
 ::-webkit-scrollbar-corner{background:transparent}
 
 .app{height:100%;display:flex;flex-direction:column}
