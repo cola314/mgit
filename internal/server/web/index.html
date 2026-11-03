@@ -57,8 +57,9 @@ body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);
   font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;overflow:hidden}
 
 /* 스크롤바 — 기본 위젯은 폭이 넓고 트랙이 회색 판으로 떠서 패널 경계를 흐린다.
-   투명 트랙 + 얇은 알약 손잡이로 바꾸고, 배경 위에 떠 있게 보이도록 여백을 준다. */
-*{scrollbar-width:thin;scrollbar-color:color-mix(in srgb,var(--muted) 45%,transparent) transparent}
+   투명 트랙 + 얇은 알약 손잡이로 바꾸고, 배경 위에 떠 있게 보이도록 여백을 준다.
+   표준 scrollbar-width/color 는 쓰지 않는다 — Chromium 121+ 은 이게 있으면 ::-webkit-scrollbar 를 무시하고
+   OS 기본(화살표 버튼 달린) 스크롤바를 그린다. Firefox 용은 @supports 안에만. */
 ::-webkit-scrollbar{width:8px;height:8px}
 ::-webkit-scrollbar-track{background:transparent}
 ::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--muted) 35%,transparent);border-radius:99px;
@@ -67,6 +68,7 @@ body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);
 ::-webkit-scrollbar-thumb:active{background:color-mix(in srgb,var(--muted) 80%,transparent);background-clip:padding-box}
 ::-webkit-scrollbar-button{display:none;width:0;height:0}
 ::-webkit-scrollbar-corner{background:transparent}
+@supports not selector(::-webkit-scrollbar){*{scrollbar-width:thin;scrollbar-color:color-mix(in srgb,var(--muted) 45%,transparent) transparent}}
 
 .app{height:100%;display:flex;flex-direction:column}
 .titlebar{display:flex;align-items:center;gap:12px;padding:0 13px;height:44px;flex:none;
@@ -452,7 +454,7 @@ body.resizing{cursor:row-resize;user-select:none}
 .emore .bd{margin-top:6px;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.55}
 .efiles{display:none}
 :root[data-embed] .efiles{display:flex;gap:5px;overflow-x:auto;padding:3px 10px 4px;
-  border-top:1px solid var(--line-soft);scrollbar-width:none}
+  border-top:1px solid var(--line-soft)}
 .efiles::-webkit-scrollbar{display:none}
 .efiles button{flex:none;font-family:var(--mono);font-size:11px;padding:1px 7px;border-radius:4px;
   border:1px solid var(--line);background:var(--panel);color:var(--ink-2);cursor:pointer;white-space:nowrap}
